@@ -199,6 +199,7 @@ fn run(db: Db, cfg: &Config, out: &OutputArgs) -> Result<()> {
         config::Mode::Open => cfg.run.rate.to_string(),
     });
     let id = output::RunId {
+        scenario: cfg.workload.scenario.as_str().to_string(),
         db: db.name().to_string(),
         mode: cfg.run.mode.as_str().to_string(),
         level,
@@ -247,6 +248,7 @@ fn load(db: Db, cfg: &Config) -> Result<()> {
         other => bail!("loader for `{}` is not implemented yet", other.name()),
     }
     eprintln!("load complete in {:.1} s", t.elapsed().as_secs_f64());
+    print_fanout_stats(cfg, &ds);
     Ok(())
 }
 
@@ -287,16 +289,45 @@ fn dry_run(db: Db, cfg: &Config) -> Result<()> {
         ds.fingerprint(),
         t.elapsed().as_secs_f64() * 1e3
     );
+    print_fanout_stats(cfg, &ds);
+    Ok(())
+}
+
+/// Timeline size and the fan-out that POST_CREATE will cause (from worker 0's
+/// op stream), for the configured scenario.
+fn print_fanout_stats(cfg: &Config, ds: &dataset::Dataset) {
     let (off, tl) = ds.timelines();
     let (fo, _) = ds.followers();
-    let max_followers = fo.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+    let followers = |u: u64| (fo[u as usize + 1] - fo[u as usize]) as u64;
+    let cap = cfg.dataset.fanout_cap as u64;
+    let untrimmed: u64 = ds.posts.iter().map(|p| followers(p.author).min(cap)).sum();
     println!(
-        "timelines: {} entries (newest {} per user, fanout_cap {}), max followers {}, longest timeline {}",
+        "scenario {}: timelines {} entries (newest {} per user; untrimmed {}), longest timeline {}",
+        cfg.workload.scenario.as_str(),
         tl.len(),
         cfg.dataset.timeline_len,
-        cfg.dataset.fanout_cap,
-        max_followers,
+        untrimmed,
         off.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0)
     );
-    Ok(())
+    let top = ds.activity[0];
+    let posts_by = |u: u64| ds.posts.iter().filter(|p| p.author == u).count();
+    println!(
+        "most active user {top}: {} followers, {} posts; most followed user 0: {} followers, {} posts",
+        followers(top),
+        posts_by(top),
+        followers(0),
+        posts_by(0)
+    );
+    let stream = workload::OpStream::generate(cfg, 0);
+    let (mut n, mut sum) = (0u64, 0u64);
+    for op in &stream.ops {
+        if op.kind == workload::OpKind::PostCreate {
+            n += 1;
+            sum += followers(op.user).min(cap);
+        }
+    }
+    println!(
+        "expected fan-out per POST_CREATE (worker 0 stream, loaded follow graph): {:.1} over {n} ops",
+        sum as f64 / n.max(1) as f64
+    );
 }

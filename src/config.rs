@@ -37,12 +37,39 @@ pub struct DatasetConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkloadWeights {
+    /// Not a weight: how activity relates to popularity (see `Scenario`).
+    pub scenario: Scenario,
     pub timeline_read: f64,
     pub user_profile_read: f64,
     pub post_like: f64,
     pub post_create: f64,
     pub hashtag_search: f64,
     pub user_follow: f64,
+}
+
+/// How user activity relates to popularity.
+///
+/// Popularity (who gets followed) is Zipf over user ids: user 0 is the most
+/// followed. Activity (who authors posts and who acts in ops) is Zipf over an
+/// activity ranking:
+/// - `Normal`: the ranking is a seeded random permutation of user ids, so
+///   activity is independent of popularity.
+/// - `Celebrity`: the ranking is the identity, so the most-followed users are
+///   also the most active (the M1/M2 behaviour).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scenario {
+    Normal,
+    Celebrity,
+}
+
+impl Scenario {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scenario::Normal => "normal",
+            Scenario::Celebrity => "celebrity",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -17,6 +17,8 @@ post_like = 15
 post_create = 10
 hashtag_search = 5
 user_follow = 5
+scenario = "normal"   # "normal": activity ranking independent of popularity
+                      # "celebrity": most-followed users are also most active
 
 [run]
 mode = "closed"       # "closed" | "open"

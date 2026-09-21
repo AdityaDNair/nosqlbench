@@ -9,6 +9,12 @@
   .vm_affinity.json in the repo root with the mask and VM PIDs. run_db.ps1 and
   bench read that file; a restarted VM (new PID) invalidates it.
 
+  The affinity lasts only as long as the VM process. Docker Desktop's Resource
+  Saver stops the VM when no containers have run for a while, and the next
+  container start creates a new vmmemWSL process without the affinity; disable
+  Resource Saver (Settings > Resources) or run run_db.ps1 elevated, which
+  re-applies the affinity after every container start.
+
   Default mask 0xFC03 = logical CPUs 0,1,10,11,12,13,14,15: P-core 0, P-core 5
   and the four E-cores. Workers run on CPUs 2,4,6,8 (P-cores 1-4).
 

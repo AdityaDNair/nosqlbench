@@ -9,10 +9,20 @@
 .PARAMETER NoVmAffinity
   Run without the Docker VM CPU affinity (see set_vm_affinity.ps1). Recorded in
   meta.json via system.vm_affinity.
+
+  VM affinity: if this script runs elevated, it (re)applies the affinity itself
+  after the container is healthy, so a VM restart (e.g. Docker Desktop Resource
+  Saver stopping the idle VM) cannot silently drop it. If not elevated, it
+  requires .vm_affinity.json to cover every running VM process.
 .PARAMETER KeepUp
   Leave the container running at the end (default: down -v).
 .PARAMETER Force
   Overwrite existing result directories.
+.PARAMETER Scenario
+  normal (default) | celebrity. Selects the dataset/op-stream scenario for both
+  the load and the runs; results go to <Out>\<scenario>\<db>\.
+.PARAMETER NoOpen
+  Skip the open-mode sweep.
 .PARAMETER WarmupSecs
   Override run.warmup_secs (default: from config).
 .PARAMETER MeasureSecs
@@ -32,6 +42,9 @@ param(
     [switch]$NoVmAffinity,
     [switch]$KeepUp,
     [switch]$Force,
+    [ValidateSet('normal', 'celebrity')]
+    [string]$Scenario = 'normal',
+    [switch]$NoOpen,
     [int]$WarmupSecs = -1,
     [int]$MeasureSecs = -1
 )
@@ -119,8 +132,8 @@ function Get-Median {
 
 $composeProfile = if ($Db -eq 'redis-ping') { 'redis' } else { $Db }
 $container = "nosqlbench-$composeProfile"
-$extraArgs = @()
-if ($Force) { $extraArgs = @('--force') }
+$extraArgs = @('--set', "workload.scenario=`"$Scenario`"")
+if ($Force) { $extraArgs += @('--force') }
 if ($WarmupSecs -ge 0) { $extraArgs += @('--warmup-secs', "$WarmupSecs") }
 if ($MeasureSecs -ge 1) { $extraArgs += @('--measure-secs', "$MeasureSecs") }
 
@@ -133,11 +146,15 @@ try {
     if ($NoVmAffinity) {
         Write-Warning 'Running WITHOUT Docker VM CPU affinity (-NoVmAffinity).'
     } else {
+        $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+        if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            & (Join-Path $PSScriptRoot 'set_vm_affinity.ps1')
+        }
         Assert-VmAffinity
     }
 
     if ($Db -ne 'redis-ping') {
-        Invoke-Native $bench @('load', '--db', $Db)
+        Invoke-Native $bench @('load', '--db', $Db, '--set', "workload.scenario=`"$Scenario`"")
     }
 
     # Closed sweep.
@@ -146,14 +163,14 @@ try {
         $tp = @()
         for ($r = 1; $r -le $Runs; $r++) {
             Invoke-Native $bench (@('run', '--db', $Db, '--mode', 'closed', '--concurrency', "$c", '--run', "$r", '--out', $Out) + $extraArgs)
-            $tp += Get-AllThroughput (Join-Path $Out "$Db\closed_${c}_run$r")
+            $tp += Get-AllThroughput (Join-Path $Out "$Scenario\$Db\closed_${c}_run$r")
         }
         $perLevel[$c] = Get-Median $tp
         Write-Host ("closed c={0}: median ALL throughput {1:N1} ops/s" -f $c, $perLevel[$c])
     }
 
     # Open sweep at percentages of the best closed level (median of its runs).
-    if ($Db -ne 'redis-ping') {
+    if ($Db -ne 'redis-ping' -and -not $NoOpen) {
         $best = ($perLevel.Values | Measure-Object -Maximum).Maximum
         Write-Host ("best closed ALL throughput (median per level): {0:N1} ops/s" -f $best)
         foreach ($pct in $percentList) {
@@ -169,5 +186,5 @@ try {
         Invoke-Native 'docker' @('compose', '--profile', $composeProfile, 'down', '-v')
     }
 }
-Write-Host "Sweep for $Db complete."
+Write-Host "Sweep for $Db ($Scenario) complete."
 

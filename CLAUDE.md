@@ -110,6 +110,7 @@ post_like = 15
 post_create = 10
 hashtag_search = 5
 user_follow = 5
+scenario = "normal"   # "normal" | "celebrity" (see section 4)
 
 [run]
 mode = "closed"       # "closed" | "open"
@@ -147,10 +148,24 @@ generator see the same world.
 
 - **IDs are `u64` everywhere** (users `0..users`, posts `0..posts`). Stored as
   `bigint` / integer, never strings.
+- **Two rankings** (*Decision (M3)*): *popularity* is user id order (user 0 is
+  the most followed); *activity* is a separate ranking used for post authors
+  and acting users. `workload.scenario` picks the activity ranking:
+  - `normal` (default, the standard sweep): a seeded random permutation of user
+    ids (`ChaCha8Rng::seed_from_u64(seed ^ 0xAC71_7171_0000_0000)`), so
+    activity is independent of popularity.
+  - `celebrity`: the identity, so the most-followed users are also the most
+    active. This reproduces the original M1 dataset exactly (fingerprint
+    `0x3e9c076ea0bd0bfe`, pinned by a unit test).
+  Reason: with one shared ranking, user 0 has 8,573 followers *and* writes ~10%
+  of posts, so each POST_CREATE fans out to ~1,880 timelines on average and
+  fan-out-on-write databases spend ~95% of their time on it. With `normal`,
+  the expected fan-out per POST_CREATE is ~17.
 - **Follows:** each user follows `avg_follows` distinct targets (±50% uniform),
-  targets drawn Zipf over users. No self-follows.
-- **Posts:** author drawn Zipf over users; `created_at` spread uniformly over the
-  30 days before `2026-01-01T00:00:00Z`; 0..=max_tags_per_post hashtags drawn Zipf.
+  targets drawn Zipf over the popularity ranking. No self-follows.
+- **Posts:** author drawn Zipf over the activity ranking; `created_at` spread
+  uniformly over the 30 days before `2026-01-01T00:00:00Z`;
+  0..=max_tags_per_post hashtags drawn Zipf.
 - **Bodies:** 40–280 ASCII chars from a fixed word list, stored in one `Vec<u8>`
   arena with an offsets `Vec<u32>`; adapters receive `&str` slices.
 - **Hashtags:** `tag0000 .. tag0999`.
@@ -158,10 +173,11 @@ generator see the same world.
 - **Timelines** (Redis, Cassandra only): each post goes to the timeline of each
   follower of its author, capped at `fanout_cap`, and each timeline keeps only
   its newest `timeline_len` (800) posts, ordered by `(created_at, post_id)` desc.
-  *Decision (M3):* untrimmed fan-out is 188M entries (median timeline 19,680
-  posts) because Zipf follows give user 0 ~8.6k followers and ~9.9k posts; that
-  does not fit Redis in 4 GB. Trimming to 800 gives 8.0M entries and leaves the
-  20 newest (all TIMELINE_READ returns) identical to fan-out on read.
+  *Decision (M3):* in the celebrity scenario untrimmed fan-out is 188M entries
+  (median timeline 19,680 posts), which does not fit Redis in 4 GB; trimmed it
+  is 8.0M. In the normal scenario it is 1.78M untrimmed, 1.51M trimmed. The
+  trim leaves the 20 newest (all TIMELINE_READ returns) identical to fan-out on
+  read.
 
 ---
 
@@ -174,7 +190,7 @@ pub enum OpKind { TimelineRead, UserProfileRead, PostLike, PostCreate, HashtagSe
 #[derive(Clone, Copy)]
 pub struct Op {
     pub kind: OpKind,
-    pub user: u64,      // acting user, Zipf
+    pub user: u64,      // acting user, Zipf over the activity ranking
     pub target: u64,    // followee (UserFollow) or post id (PostLike)
     pub body: u32,      // index into body arena (PostCreate)
     pub tags: [u16; 3],
@@ -186,6 +202,8 @@ pub struct Op {
 
 - Each worker gets its own pre-generated `Vec<Op>` of 1,048,576 ops (seed =
   `seed ^ worker_id`), cycled with a wrapping cursor.
+- Acting users are Zipf over the activity ranking; USER_FOLLOW targets are Zipf
+  over the popularity ranking; POST_LIKE targets are Zipf over preloaded posts.
 - `new_post_id = (1 << 40) | (worker_id << 32) | seq`. Writes must be idempotent
   so the second pass through the stream doesn't error.
 - New post timestamps: epoch + 1 day + seq ms.
@@ -316,15 +334,15 @@ bits  1..0   reserved
 
 ## 9. Output
 
-`results\<db>\<mode>_<level>_run<n>\`
+`results\<scenario>\<db>\<mode>_<level>_run<n>\` (open-mode level = `<pct>pct`).
 
 - `summary.csv`
   `db,mode,level,run,op,count,errors,timeouts,throughput_ops_s,p50_us,p90_us,p95_us,p99_us,p999_us,max_us,send_lag_p99_us,dropped_records`
   plus one `op=ALL` row.
 - `timeseries.csv` — `second,op,ok,errors`
-- `meta.json` — resolved config, git commit, pinning plan, CPU model, Windows
-  build, power source (AC/battery), active power scheme, Docker version and image
-  tags, start time.
+- `meta.json` — scenario, resolved config, git commit, pinning plan, CPU model,
+  Windows build, power source (AC/battery), active power scheme, Docker version
+  and image tags, Docker VM affinity, start time.
 - `<op>.hgrm` — HdrHistogram percentile export.
 
 Print a short table to stdout at the end of each run.
@@ -461,7 +479,12 @@ Rels: `FOLLOWS{since}`, `POSTED`, `LIKED`, `TAGGED_WITH`. Likes exist only as
   `.vm_affinity.json` (mask, VM PIDs, read-back). `run_db.ps1` refuses to run
   unless that file matches the running VM PIDs (or `-NoVmAffinity` is given,
   which is recorded). `meta.json` records the affinity state under
-  `system.vm_affinity`.
+  `system.vm_affinity` and the Docker kernel under `system.docker_kernel`.
+  On this laptop Docker Desktop uses the WSL2 backend, so the containers run in
+  `vmmemWSL`. The affinity dies with the VM process: Docker Desktop's Resource
+  Saver stops an idle VM and the next container start gets a new, unpinned
+  `vmmemWSL` (observed in M3). Disable Resource Saver, or run `run_db.ps1`
+  elevated: it then re-applies the affinity after every container start.
 
 ---
 
@@ -477,7 +500,11 @@ Rels: `FOLLOWS{since}`, `POSTED`, `LIKED`, `TAGGED_WITH`. Likes exist only as
 6. `docker compose --profile <db> down -v`.
 
 `run_all.ps1`: noop calibration → redis-ping baseline (inside the redis profile)
-→ redis → mongo → cassandra → neo4j.
+→ redis → mongo → cassandra → neo4j, all with scenario `normal`; then a short
+`celebrity` run per database (`run_db.ps1 -Scenario celebrity -Levels 8,32
+-Runs 1 -NoOpen`, 60 s measure), results under `results\celebrity\`. Each
+scenario loads its own dataset; loaders record the loaded scenario and adapters
+refuse to run against a different one.
 
 Writes during runs mutate state; data is reloaded per database, not per run.
 

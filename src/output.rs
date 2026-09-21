@@ -16,8 +16,9 @@ use crate::telemetry::new_histogram;
 use crate::worker::EngineResult;
 use crate::workload::OpKind;
 
-/// Identifies one run: `results\<db>\<mode>_<level>_run<n>\`.
+/// Identifies one run: `results\<scenario>\<db>\<mode>_<level>_run<n>\`.
 pub struct RunId {
+    pub scenario: String,
     pub db: String,
     pub mode: String,
     pub level: String,
@@ -26,7 +27,8 @@ pub struct RunId {
 
 impl RunId {
     pub fn dir(&self, root: &Path) -> PathBuf {
-        root.join(&self.db)
+        root.join(&self.scenario)
+            .join(&self.db)
             .join(format!("{}_{}_run{}", self.mode, self.level, self.run))
     }
 }
@@ -39,6 +41,9 @@ pub struct SysInfo {
     pub power_source: Option<String>,
     pub power_scheme: Option<String>,
     pub docker_version: Option<String>,
+    /// Kernel of the Docker VM; "...-microsoft-standard-WSL2" means the
+    /// containers run in the WSL2 VM (process vmmemWSL).
+    pub docker_kernel: Option<String>,
     pub docker_images: Vec<String>,
     pub git_commit: Option<String>,
     pub git_dirty: Option<bool>,
@@ -130,6 +135,7 @@ impl SysInfo {
             power_source: field("power"),
             power_scheme: cmd_out("powercfg", &["/getactivescheme"]),
             docker_version: cmd_out("docker", &["version", "--format", "{{.Server.Version}}"]),
+            docker_kernel: cmd_out("docker", &["info", "--format", "{{.KernelVersion}}"]),
             docker_images,
             git_commit: cmd_out("git", &["rev-parse", "HEAD"]),
             git_dirty: Command::new("git")
@@ -373,6 +379,7 @@ pub fn write_run(
         })
         .collect();
     let meta = json!({
+        "scenario": id.scenario,
         "db": id.db,
         "mode": id.mode,
         "level": id.level,
@@ -398,7 +405,10 @@ pub fn write_run(
 }
 
 pub fn print_table(id: &RunId, rows: &[OpRow], res: &EngineResult, open: bool) {
-    println!("\n{} {} level={} run={}", id.db, id.mode, id.level, id.run);
+    println!(
+        "\n{} {} level={} run={} scenario={}",
+        id.db, id.mode, id.level, id.run, id.scenario
+    );
     println!(
         "{:<18} {:>11} {:>7} {:>7} {:>13} {:>10} {:>10} {:>10} {:>10} {:>10}",
         "op", "count", "errors", "tmo", "ops/s", "p50_us", "p90_us", "p99_us", "p999_us", "max_us"

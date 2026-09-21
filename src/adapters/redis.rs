@@ -78,8 +78,21 @@ impl Adapter for RedisAdapter {
         let tag_names: Vec<String> = (0..cfg.dataset.hashtags)
             .map(|i| tag_name(i as u16))
             .collect();
+        let mut con = connect(&cfg.endpoints.redis).await?;
+        let want = cfg.workload.scenario.as_str();
+        let loaded: Option<String> = redis::cmd("GET")
+            .arg(crate::loaders::redis::SCENARIO_KEY)
+            .query_async(&mut con)
+            .await?;
+        if loaded.as_deref() != Some(want) {
+            anyhow::bail!(
+                "Redis holds the {} dataset but this run uses scenario {want}; \
+                 run `bench load --db redis` with the same scenario",
+                loaded.as_deref().unwrap_or("(no)")
+            );
+        }
         Ok(RedisAdapter {
-            con: connect(&cfg.endpoints.redis).await?,
+            con,
             tag_keys: tag_names.iter().map(|t| format!("tag:{t}")).collect(),
             tag_names,
             fanout_cap: cfg.dataset.fanout_cap as usize,

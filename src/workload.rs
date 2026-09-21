@@ -4,7 +4,7 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use crate::config::Config;
-use crate::dataset::{draw_tags, BodyArena, ZipfIds, DAY_MS, EPOCH_MS};
+use crate::dataset::{activity_ranking, draw_tags, BodyArena, ZipfIds, DAY_MS, EPOCH_MS};
 
 /// Ops per worker stream (cycled with a wrapping cursor).
 pub const OPS_PER_WORKER: usize = 1 << 20;
@@ -79,7 +79,10 @@ impl OpStream {
         );
         let d = &cfg.dataset;
         let mut rng = ChaCha8Rng::seed_from_u64(cfg.seed ^ worker_id as u64);
+        // Acting users: Zipf over the activity ranking. Follow targets: Zipf
+        // over popularity (user id order), like the dataset's follows.
         let user_z = ZipfIds::new(d.users, d.zipf_s);
+        let activity = activity_ranking(cfg);
         let post_z = ZipfIds::new(d.posts, d.zipf_s);
         let tag_z = ZipfIds::new(d.hashtags as u64, d.zipf_s);
 
@@ -104,7 +107,7 @@ impl OpStream {
             let r: f64 = rng.random();
             let k = cum.iter().position(|c| r < *c).unwrap_or(OpKind::COUNT - 1);
             let kind = OpKind::ALL[k];
-            let user = user_z.sample(&mut rng);
+            let user = activity[user_z.sample(&mut rng) as usize];
             let mut op = Op {
                 kind,
                 user,

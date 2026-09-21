@@ -10,6 +10,8 @@ use crate::config::Config;
 use crate::dataset::Dataset;
 
 const PIPELINE: usize = 1000;
+/// Records which scenario's dataset is loaded; the adapter checks it.
+pub const SCENARIO_KEY: &str = "bench:scenario";
 /// Members per timeline ZADD command.
 const ZADD_CHUNK: usize = 100;
 
@@ -157,6 +159,11 @@ pub async fn load(cfg: &Config, ds: &Dataset) -> Result<()> {
         .lines()
         .find_map(|l| l.strip_prefix("used_memory_human:"))
         .unwrap_or("?");
+    let _: () = redis::cmd("SET")
+        .arg(SCENARIO_KEY)
+        .arg(cfg.workload.scenario.as_str())
+        .query_async(&mut con)
+        .await?;
     eprintln!(
         "  loaded: {keys} keys, {} timeline entries, used_memory {used}",
         tl.len()

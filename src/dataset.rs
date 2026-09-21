@@ -1,11 +1,12 @@
 //! Deterministic dataset generation. Every loader and the op generator derive
 //! from `ChaCha8Rng::seed_from_u64(seed)`, so they all see the same world.
 
+use rand::seq::SliceRandom;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Zipf};
 
-use crate::config::Config;
+use crate::config::{Config, Scenario};
 
 /// 2026-01-01T00:00:00Z in Unix milliseconds.
 pub const EPOCH_MS: i64 = 1_767_225_600_000;
@@ -77,6 +78,22 @@ const WORDS: &[&str] = &[
     "sun",
     "night",
 ];
+
+/// Salt for the activity-ranking RNG, so the permutation does not disturb the
+/// main dataset stream or collide with per-worker op seeds (`seed ^ worker_id`).
+const ACTIVITY_SALT: u64 = 0xAC71_7171_0000_0000;
+
+/// Activity ranking: `ranking[r]` is the user at Zipf rank `r + 1` for post
+/// authorship and acting users. Identity in the celebrity scenario; a seeded
+/// random permutation in the normal scenario.
+pub fn activity_ranking(cfg: &Config) -> Vec<u64> {
+    let mut v: Vec<u64> = (0..cfg.dataset.users).collect();
+    if cfg.workload.scenario == Scenario::Normal {
+        let mut rng = ChaCha8Rng::seed_from_u64(cfg.seed ^ ACTIVITY_SALT);
+        v.shuffle(&mut rng);
+    }
+    v
+}
 
 /// Contiguous storage for many short ASCII strings.
 #[derive(Debug, Default, Clone)]
@@ -190,6 +207,8 @@ pub struct Dataset {
     pub tag_names: Vec<String>,
     pub fanout_cap: u32,
     pub timeline_len: u32,
+    /// See `activity_ranking`.
+    pub activity: Vec<u64>,
 }
 
 pub fn tag_name(i: u16) -> String {
@@ -200,8 +219,11 @@ impl Dataset {
     pub fn generate(cfg: &Config) -> Dataset {
         let d = &cfg.dataset;
         let mut rng = ChaCha8Rng::seed_from_u64(cfg.seed);
+        // Follow targets: Zipf over popularity (user id order).
+        // Post authors: Zipf over the activity ranking.
         let user_z = ZipfIds::new(d.users, d.zipf_s);
         let tag_z = ZipfIds::new(d.hashtags as u64, d.zipf_s);
+        let activity = activity_ranking(cfg);
 
         // Users. Joined some time in the year before the post window.
         let mut users = Vec::with_capacity(d.users as usize);
@@ -243,7 +265,7 @@ impl Dataset {
         let mut posts = Vec::with_capacity(d.posts as usize);
         let mut bodies = BodyArena::with_capacity(d.posts as usize, d.posts as usize * 160);
         for id in 0..d.posts {
-            let author = user_z.sample(&mut rng);
+            let author = activity[user_z.sample(&mut rng) as usize];
             let created_at_ms = rng.random_range(window_start..EPOCH_MS);
             let (tags, ntags) = draw_tags(&mut rng, &tag_z, d.max_tags_per_post);
             bodies.push_random(&mut rng);
@@ -266,6 +288,7 @@ impl Dataset {
             tag_names,
             fanout_cap: d.fanout_cap,
             timeline_len: d.timeline_len,
+            activity,
         }
     }
 
@@ -437,11 +460,60 @@ pub(crate) mod tests {
 
     #[test]
     fn same_seed_same_hash() {
-        let a = Dataset::generate(&small_cfg(42)).fingerprint();
-        let b = Dataset::generate(&small_cfg(42)).fingerprint();
-        let c = Dataset::generate(&small_cfg(43)).fingerprint();
-        assert_eq!(a, b);
-        assert_ne!(a, c);
+        for scenario in [Scenario::Normal, Scenario::Celebrity] {
+            let cfg = |seed| {
+                let mut c = small_cfg(seed);
+                c.workload.scenario = scenario;
+                c
+            };
+            let a = Dataset::generate(&cfg(42)).fingerprint();
+            let b = Dataset::generate(&cfg(42)).fingerprint();
+            let c = Dataset::generate(&cfg(43)).fingerprint();
+            assert_eq!(a, b, "{scenario:?}");
+            assert_ne!(a, c, "{scenario:?}");
+        }
+        let mut n = small_cfg(42);
+        n.workload.scenario = Scenario::Normal;
+        let mut c = small_cfg(42);
+        c.workload.scenario = Scenario::Celebrity;
+        assert_ne!(
+            Dataset::generate(&n).fingerprint(),
+            Dataset::generate(&c).fingerprint()
+        );
+    }
+
+    /// The celebrity scenario is exactly the M1/M2 dataset (default config).
+    #[test]
+    fn celebrity_reproduces_original_dataset() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("config")
+            .join("default.toml");
+        let c = Config::load(&path, &["workload.scenario=\"celebrity\"".into()]).unwrap();
+        assert_eq!(Dataset::generate(&c).fingerprint(), 0x3e9c_076e_a0bd_0bfe);
+    }
+
+    #[test]
+    fn normal_scenario_decouples_activity_from_popularity() {
+        let mut cfg = small_cfg(42);
+        cfg.workload.scenario = Scenario::Normal;
+        let d = Dataset::generate(&cfg);
+        let r = activity_ranking(&cfg);
+        let mut sorted = r.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            (0..cfg.dataset.users).collect::<Vec<_>>(),
+            "permutation"
+        );
+        // Most prolific author is the top of the activity ranking, and it is
+        // not the most-followed user (user 0).
+        let mut posts = vec![0u32; cfg.dataset.users as usize];
+        for p in &d.posts {
+            posts[p.author as usize] += 1;
+        }
+        let top = (0..posts.len()).max_by_key(|&u| posts[u]).unwrap() as u64;
+        assert_eq!(top, r[0]);
+        assert_ne!(top, 0);
     }
 
     #[test]
