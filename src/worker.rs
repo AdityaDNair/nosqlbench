@@ -414,3 +414,123 @@ mod tests {
         assert_eq!(split(1, 1), vec![1]);
     }
 }
+
+/// Verifies the "no allocation on the request path" rule by counting heap
+/// allocations made on the worker thread while the loops run.
+///
+/// Test-only: the counting allocator wraps `System` and exists only in the
+/// test binary, never in the benchmark binary.
+#[cfg(test)]
+mod alloc_tests {
+    use super::*;
+    use crate::adapters::noop::Noop;
+    use crate::dataset::tests::small_cfg;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::Ordering;
+
+    thread_local! {
+        static ALLOCS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    struct Counting;
+
+    // SAFETY: forwards every call unchanged to the system allocator; the only
+    // addition is a thread-local counter bump, which does not allocate.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.alloc(l) }
+        }
+        unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.alloc_zeroed(l) }
+        }
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+            let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+            unsafe { System.realloc(p, l, n) }
+        }
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            unsafe { System.dealloc(p, l) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: Counting = Counting;
+
+    fn allocs() -> u64 {
+        ALLOCS.with(|c| c.get())
+    }
+
+    /// Run noop loops through warm-up, then count allocations on this thread
+    /// across a measure window. Returns (allocations, ok records measured).
+    fn measure(mode: Mode, loops: u32, rate: f64) -> (u64, u64) {
+        let mut cfg = small_cfg(42);
+        cfg.run.mode = mode;
+        let cfg = Arc::new(cfg);
+        let shared = Shared::new();
+        let (producer, consumer) = RingBuffer::new(1 << 20);
+        let agg_shared = shared.clone();
+        let aggregator =
+            std::thread::spawn(move || telemetry::aggregate(vec![consumer], agg_shared));
+
+        let spec = WorkerSpec {
+            id: 0,
+            cpu: 0,
+            loops,
+            rate,
+        };
+        let stream = OpStream::generate_n(&cfg, 0, 1 << 16, 256);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let local = LocalSet::new();
+        let delta = local.block_on(&rt, async {
+            let ctl_shared = shared.clone();
+            let controller = tokio::task::spawn_local(async move {
+                ctl_shared.phase.store(PHASE_WARMUP, Relaxed);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let before = allocs();
+                ctl_shared.phase.store(PHASE_MEASURE, Relaxed);
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                ctl_shared.phase.store(PHASE_STOP, Relaxed);
+                allocs() - before
+            });
+            let report = worker_main::<Noop>(
+                spec,
+                cfg,
+                shared.clone(),
+                Arc::new(AtomicU32::new(0)),
+                producer,
+                quanta::Clock::new(),
+                stream,
+            )
+            .await
+            .unwrap();
+            assert_eq!(report.dropped, 0);
+            controller.await.unwrap()
+        });
+        shared.workers_done.store(true, Ordering::Release);
+        let agg = aggregator.join().unwrap();
+        let ok: u64 = agg.ok.iter().map(|h| h.len()).sum();
+        (delta, ok)
+    }
+
+    #[test]
+    fn request_loops_do_not_allocate() {
+        // Control: the counter does see allocations on this thread.
+        let before = allocs();
+        drop(std::hint::black_box(Box::new(1u64)));
+        assert_eq!(allocs() - before, 1);
+
+        let (a, ok) = measure(Mode::Closed, 32, 0.0);
+        println!("closed: {a} allocations during {ok} measured ops");
+        assert!(ok > 0);
+        assert_eq!(a, 0, "closed loop allocated");
+
+        let (a, ok) = measure(Mode::Open, 64, 1_000_000.0);
+        println!("open: {a} allocations during {ok} measured ops");
+        assert!(ok > 0);
+        assert_eq!(a, 0, "open loop allocated");
+    }
+}
