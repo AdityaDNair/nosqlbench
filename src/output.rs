@@ -42,6 +42,43 @@ pub struct SysInfo {
     pub docker_images: Vec<String>,
     pub git_commit: Option<String>,
     pub git_dirty: Option<bool>,
+    /// Docker VM CPU affinity: the state written by scripts\set_vm_affinity.ps1,
+    /// the VM processes running now, and whether the affinity covers them.
+    pub vm_affinity: serde_json::Value,
+}
+
+/// Combine `.vm_affinity.json` (if present) with the running VM processes.
+/// `in_effect` is true only if every running VM PID was pinned by the script.
+fn vm_affinity(running: serde_json::Value) -> serde_json::Value {
+    let state: Option<serde_json::Value> = std::fs::read_to_string(".vm_affinity.json")
+        .ok()
+        // Windows PowerShell 5.1 writes UTF-8 with a BOM.
+        .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok());
+    let pids = |v: &serde_json::Value| -> Vec<u64> {
+        // ConvertTo-Json writes one element as an object, several as an array.
+        match v {
+            serde_json::Value::Array(a) => {
+                a.iter().filter_map(|p| p.get("pid")?.as_u64()).collect()
+            }
+            serde_json::Value::Object(_) => {
+                v.get("pid").and_then(|p| p.as_u64()).into_iter().collect()
+            }
+            _ => Vec::new(),
+        }
+    };
+    let pinned = state
+        .as_ref()
+        .and_then(|s| s.get("processes"))
+        .map(pids)
+        .unwrap_or_default();
+    let running_pids = pids(&running);
+    let in_effect = !running_pids.is_empty() && running_pids.iter().all(|p| pinned.contains(p));
+    json!({
+        "in_effect": in_effect,
+        "mask": if in_effect { state.as_ref().and_then(|s| s.get("mask")).cloned() } else { None },
+        "state_file": state,
+        "running_vm": running,
+    })
 }
 
 fn cmd_out(prog: &str, args: &[&str]) -> Option<String> {
@@ -61,7 +98,8 @@ $b = @(Get-CimInstance Win32_Battery)
 if ($b.Count -eq 0) { $p = 'AC (no battery)' }
 elseif (@($b | Where-Object { $_.BatteryStatus -ne 2 }).Count -eq 0) { $p = 'AC' }
 else { $p = 'battery' }
-[pscustomobject]@{ cpu = $c.Trim(); build = "$($os.Caption) $($os.BuildNumber).$ubr"; power = $p } | ConvertTo-Json -Compress
+$vm = @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ name = $_.Name; pid = $_.Id } })
+[pscustomobject]@{ cpu = $c.Trim(); build = "$($os.Caption) $($os.BuildNumber).$ubr"; power = $p; vm = $vm } | ConvertTo-Json -Compress -Depth 3
 "#;
 
 impl SysInfo {
@@ -80,7 +118,13 @@ impl SysInfo {
         let docker_images = cmd_out("docker", &["ps", "--format", "{{.Image}}"])
             .map(|s| s.lines().map(str::to_string).collect())
             .unwrap_or_default();
+        let running_vm = ps
+            .as_ref()
+            .and_then(|v| v.get("vm"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         SysInfo {
+            vm_affinity: vm_affinity(running_vm),
             cpu_model: field("cpu"),
             windows_build: field("build"),
             power_source: field("power"),

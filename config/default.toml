@@ -8,6 +8,7 @@ hashtags = 1_000
 max_tags_per_post = 3
 zipf_s = 0.99
 fanout_cap = 10_000
+timeline_len = 800    # Redis/Cassandra timelines keep the newest N posts per user
 
 [workload]            # weights, normalised at load time
 timeline_read = 40

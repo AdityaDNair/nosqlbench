@@ -2,6 +2,7 @@ mod adapters;
 mod config;
 mod cpu;
 mod dataset;
+mod loaders;
 mod output;
 mod telemetry;
 mod worker;
@@ -154,8 +155,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Load(a) => {
-            let _cfg = a.common.load_config()?;
-            bail!("`bench load --db {}` is not implemented yet", a.db.name())
+            let cfg = a.common.load_config()?;
+            load(a.db, &cfg)
         }
         Cmd::Run(a) => {
             let cfg = a.common.load_config()?;
@@ -214,6 +215,8 @@ fn run(db: Db, cfg: &Config, out: &OutputArgs) -> Result<()> {
     let start = SystemTime::now();
     let res = match db {
         Db::Noop => worker::run_engine::<adapters::noop::Noop>(cfg, &plan)?,
+        Db::RedisPing => worker::run_engine::<adapters::redis_ping::RedisPing>(cfg, &plan)?,
+        Db::Redis => worker::run_engine::<adapters::redis::RedisAdapter>(cfg, &plan)?,
         other => bail!("adapter `{}` is not implemented yet", other.name()),
     };
     let rows = output::write_run(&dir, &id, cfg, &plan, &res, &sys, start, true)?;
@@ -222,6 +225,28 @@ fn run(db: Db, cfg: &Config, out: &OutputArgs) -> Result<()> {
     if res.dropped > 0 {
         bail!("{} telemetry records dropped: run is invalid", res.dropped);
     }
+    Ok(())
+}
+
+fn load(db: Db, cfg: &Config) -> Result<()> {
+    let t = Instant::now();
+    let ds = dataset::Dataset::generate(cfg);
+    eprintln!(
+        "generated dataset (fingerprint {:#018x}) in {:.1} s; loading into {}",
+        ds.fingerprint(),
+        t.elapsed().as_secs_f64(),
+        db.name()
+    );
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let t = Instant::now();
+    match db {
+        Db::Redis => rt.block_on(loaders::redis::load(cfg, &ds))?,
+        Db::Noop | Db::RedisPing => bail!("`{}` has no dataset to load", db.name()),
+        other => bail!("loader for `{}` is not implemented yet", other.name()),
+    }
+    eprintln!("load complete in {:.1} s", t.elapsed().as_secs_f64());
     Ok(())
 }
 
@@ -261,6 +286,17 @@ fn dry_run(db: Db, cfg: &Config) -> Result<()> {
         ds.posts.len(),
         ds.fingerprint(),
         t.elapsed().as_secs_f64() * 1e3
+    );
+    let (off, tl) = ds.timelines();
+    let (fo, _) = ds.followers();
+    let max_followers = fo.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+    println!(
+        "timelines: {} entries (newest {} per user, fanout_cap {}), max followers {}, longest timeline {}",
+        tl.len(),
+        cfg.dataset.timeline_len,
+        cfg.dataset.fanout_cap,
+        max_followers,
+        off.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0)
     );
     Ok(())
 }

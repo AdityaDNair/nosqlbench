@@ -1,0 +1,81 @@
+# One profile per database; only one runs at a time:
+#   docker compose --profile redis up -d
+# Ports are published on 127.0.0.1 only. No cpuset: VM CPU numbering does not
+# map to host cores (host-side pinning is done on the VM process instead, see
+# scripts\set_vm_affinity.ps1).
+
+services:
+  redis:
+    image: redis:7.4
+    container_name: nosqlbench-redis
+    profiles: ["redis"]
+    # Persistence off: no RDB snapshots, no AOF.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["127.0.0.1:6379:6379"]
+    mem_limit: 4g
+    cpus: 6
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mongo:
+    image: mongo:8.0
+    container_name: nosqlbench-mongo
+    profiles: ["mongo"]
+    ports: ["127.0.0.1:27017:27017"]
+    mem_limit: 4g
+    cpus: 6
+    volumes: ["mongo-data:/data/db"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  cassandra:
+    image: cassandra:5.0
+    container_name: nosqlbench-cassandra
+    profiles: ["cassandra"]
+    ports: ["127.0.0.1:9042:9042"]
+    mem_limit: 4g
+    cpus: 6
+    environment:
+      MAX_HEAP_SIZE: 2G
+      HEAP_NEWSIZE: 400M
+    volumes: ["cassandra-data:/var/lib/cassandra"]
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces'"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 120s
+
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: nosqlbench-neo4j
+    profiles: ["neo4j"]
+    ports: ["127.0.0.1:7687:7687", "127.0.0.1:7474:7474"]
+    mem_limit: 4g
+    cpus: 6
+    environment:
+      NEO4J_AUTH: neo4j/benchpass
+      NEO4J_server_memory_heap_max__size: 2G
+      NEO4J_server_memory_heap_initial__size: 2G
+      NEO4J_server_memory_pagecache_size: 1G
+    volumes: ["neo4j-data:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p benchpass 'RETURN 1'"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 30s
+
+volumes:
+  redis-data:
+  mongo-data:
+  cassandra-data:
+  neo4j-data:

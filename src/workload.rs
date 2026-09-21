@@ -48,10 +48,6 @@ impl OpKind {
 #[derive(Clone, Copy, Debug)]
 pub struct Op {
     pub kind: OpKind,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the database adapters (M3+)")
-    )]
     pub user: u64,
     pub target: u64,
     pub body: u32,

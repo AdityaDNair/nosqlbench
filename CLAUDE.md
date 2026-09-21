@@ -101,6 +101,7 @@ hashtags = 1_000
 max_tags_per_post = 3
 zipf_s = 0.99
 fanout_cap = 10_000
+timeline_len = 800    # Redis/Cassandra timelines keep the newest N posts per user
 
 [workload]            # weights, normalised at load time
 timeline_read = 40
@@ -124,6 +125,7 @@ ring_slots = 1_048_576
 [cpu]
 worker_cpus = []      # empty = auto: one logical CPU per physical P-core
 aggregator_cpu = -1   # -1 = auto: first E-core, else last P-core
+worker_priority = "highest"  # "normal" | "above_normal" | "highest" | "time_critical"
 
 [endpoints]
 redis = "redis://127.0.0.1:6379"
@@ -154,7 +156,12 @@ generator see the same world.
 - **Hashtags:** `tag0000 .. tag0999`.
 - No likes are pre-loaded.
 - **Timelines** (Redis, Cassandra only): each post goes to the timeline of each
-  follower of its author, capped at `fanout_cap`.
+  follower of its author, capped at `fanout_cap`, and each timeline keeps only
+  its newest `timeline_len` (800) posts, ordered by `(created_at, post_id)` desc.
+  *Decision (M3):* untrimmed fan-out is 188M entries (median timeline 19,680
+  posts) because Zipf follows give user 0 ~8.6k followers and ~9.9k posts; that
+  does not fit Redis in 4 GB. Trimming to 800 gives 8.0M entries and leaves the
+  20 newest (all TIMELINE_READ returns) identical to fan-out on read.
 
 ---
 
@@ -230,11 +237,21 @@ every database pays. Reported as its own result, never mixed into Redis numbers.
   Each core entry has `EfficiencyClass` and a group mask. The highest
   `EfficiencyClass` = P-cores. Pick the lowest logical CPU of each P-core
   (one thread per physical core).
+- *Decision (M2):* the auto plan skips the P-core holding logical CPU 0,
+  because Windows routes most device interrupts/DPCs there (workers on this
+  laptop: CPUs 2, 4, 6, 8). The reason is written to `meta.json`
+  (`pinning.skip_reason`). Not skipped if it is the only P-core, or when
+  `worker_cpus` is set explicitly.
 - If every core has the same class, treat all as P.
 - Assume a single processor group (true on these laptops); error clearly otherwise.
 - Print the pinning plan at startup and write it to `meta.json`.
 - One OS thread per worker, pinned with `core_affinity`, running a
   `current_thread` Tokio runtime. One aggregator thread, pinned.
+- *Decision (M2):* worker threads run at `cpu.worker_priority = "highest"`
+  (`SetThreadPriority`). Measured on noop open mode at 5M ops/s: send_lag p99
+  2.1 ms at normal priority (other threads took a worker's CPU for ~30 ms
+  quanta), 0.53 ms at highest. `time_critical` was lower still but risks
+  starving system threads on the worker cores, so it is not the default.
 
 ### Request loops
 Inside a worker, create C long-lived async loops once (`join_all` over a pre-built
@@ -330,7 +347,7 @@ likes:{post_id}        STRING counter (INCR)
 likers:{post_id}       SET   user ids
 ```
 - POST_CREATE: pipeline HSET post + ZADD tag:*; SMEMBERS followers (truncate to
-  cap); pipeline ZADD timeline:{f}.
+  cap); pipeline ZADD timeline:{f} + ZREMRANGEBYRANK timeline:{f} 0 -(timeline_len+1).
 - TIMELINE_READ: ZREVRANGE timeline 0 19 → pipeline HGETALL post:* (20).
 - HASHTAG_SEARCH: ZREVRANGE tag 0 19 → pipeline HGETALL.
 - POST_LIKE: pipeline SADD likers + INCR likes.
@@ -394,7 +411,8 @@ CREATE TABLE post_like_counts (post_id bigint PRIMARY KEY, like_count counter);
 - Consistency `ONE`. All statements prepared.
 - POST_CREATE: insert posts, posts_by_author, posts_by_hashtag per tag; select
   followers_by_user (limit cap); concurrent inserts into user_timeline
-  (`join_all`, no multi-partition batches).
+  (`join_all`, no multi-partition batches). Loader writes only the newest
+  `timeline_len` rows per timeline; writes during runs are not trimmed.
 - POST_LIKE: insert post_likes + counter update.
 - USER_FOLLOW: insert both follow tables.
 - Loader: concurrent prepared inserts, concurrency ~256.
@@ -436,6 +454,14 @@ Rels: `FOLLOWS{since}`, `POSTED`, `LIKED`, `TAGGED_WITH`. Likes exist only as
 - Neo4j env: `NEO4J_AUTH=neo4j/benchpass`, `NEO4J_server_memory_heap_max__size=2G`,
   `NEO4J_server_memory_heap_initial__size=2G`, `NEO4J_server_memory_pagecache_size=1G`.
 - Named volumes, removed with `down -v` after each database's sweep.
+- *Decision (M3):* the Docker VM process (`vmmem` / `vmmemWSL`) is pinned to
+  logical CPUs 0,1,10,11,12,13,14,15 (mask `0xFC03`) so it never shares a
+  physical core with the workers. Setting it needs Administrator:
+  `scripts\set_vm_affinity.ps1` is run once, elevated; it writes
+  `.vm_affinity.json` (mask, VM PIDs, read-back). `run_db.ps1` refuses to run
+  unless that file matches the running VM PIDs (or `-NoVmAffinity` is given,
+  which is recorded). `meta.json` records the affinity state under
+  `system.vm_affinity`.
 
 ---
 
@@ -443,7 +469,8 @@ Rels: `FOLLOWS{since}`, `POSTED`, `LIKED`, `TAGGED_WITH`. Likes exist only as
 
 1. `sysinfo.ps1` → abort if on battery (`Win32_Battery.BatteryStatus -ne 2`);
    record power scheme (`powercfg /getactivescheme`).
-2. `docker compose --profile <db> up -d`, poll `docker inspect` health until healthy.
+2. `docker compose --profile <db> up -d`, poll `docker inspect` health until healthy,
+   then verify the VM CPU affinity (section 11).
 3. `bench load --db <db>`.
 4. Closed mode at concurrency 1, 8, 32, 128 × 3 runs.
 5. Best closed-mode `ALL` throughput → open mode at 50%, 80%, 95% of it × 3 runs.
@@ -499,6 +526,9 @@ measured by redis-ping, differing durability settings).
 
 - No io_uring, huge pages, custom allocators, unsafe code (except the `windows`
   crate calls in `cpu.rs`, kept minimal and commented).
+  *Exception (M2):* a test-only counting allocator in `worker.rs`
+  (`#[cfg(test)]`, wraps `System`) verifies that request loops make zero heap
+  allocations in steady state. It is never compiled into the benchmark binary.
 - Don't share a client/connection between workers.
 - Don't `tokio::spawn` per request.
 - Don't format strings or generate random numbers on the request path outside

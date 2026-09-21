@@ -30,6 +30,8 @@ pub struct DatasetConfig {
     pub max_tags_per_post: u8,
     pub zipf_s: f64,
     pub fanout_cap: u32,
+    /// Redis/Cassandra timelines keep only the newest N posts per user.
+    pub timeline_len: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +147,9 @@ impl Config {
         }
         if d.hashtags < 1 || d.hashtags > 10_000 {
             bail!("dataset.hashtags must be in 1..=10000 (names are tag0000..tag9999)");
+        }
+        if d.timeline_len < 20 {
+            bail!("dataset.timeline_len must be >= 20 (TIMELINE_READ returns 20 posts)");
         }
         if d.max_tags_per_post > 3 {
             bail!("dataset.max_tags_per_post must be <= 3");

@@ -2,13 +2,14 @@
 //! runtime; workers are generic over `A: Adapter` (static dispatch).
 
 pub mod noop;
+pub mod redis;
+pub mod redis_ping;
 
 use crate::config::Config;
 use crate::dataset::BodyArena;
 use crate::workload::Op;
 
 #[derive(Debug, thiserror::Error)]
-#[expect(dead_code, reason = "constructed by the database adapters (M3+)")]
 pub enum AdapterError {
     /// The driver reported a timeout.
     #[error("timeout")]

@@ -187,10 +187,9 @@ pub struct Dataset {
     pub posts: Vec<Post>,
     /// Body of post `i` is `bodies.get(i)`.
     pub bodies: BodyArena,
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loaders (M3+)"))]
     pub tag_names: Vec<String>,
-    #[expect(dead_code, reason = "used by the loaders (M3+)")]
     pub fanout_cap: u32,
+    pub timeline_len: u32,
 }
 
 pub fn tag_name(i: u16) -> String {
@@ -266,10 +265,10 @@ impl Dataset {
             bodies,
             tag_names,
             fanout_cap: d.fanout_cap,
+            timeline_len: d.timeline_len,
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loaders (M3+)"))]
     pub fn following(&self, u: u64) -> &[u64] {
         let a = self.follow_offsets[u as usize] as usize;
         let b = self.follow_offsets[u as usize + 1] as usize;
@@ -277,7 +276,6 @@ impl Dataset {
     }
 
     /// Reverse adjacency (followers of each user) in CSR form, follower ids ascending.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loaders (M3+)"))]
     pub fn followers(&self) -> (Vec<u32>, Vec<u64>) {
         let n = self.users.len();
         let mut counts = vec![0u32; n + 1];
@@ -295,6 +293,50 @@ impl Dataset {
                 out[fill[t as usize] as usize] = u;
                 fill[t as usize] += 1;
             }
+        }
+        (offsets, out)
+    }
+
+    /// Fan-out-on-write timelines: for each user, the newest `timeline_len`
+    /// posts by accounts they follow, newest first by `(created_at, post_id)`.
+    /// A post reaches a follower only if that follower is among the first
+    /// `fanout_cap` followers (by id) of its author.
+    /// Returns CSR `(offsets, post_ids)`.
+    pub fn timelines(&self) -> (Vec<u32>, Vec<u64>) {
+        let n = self.users.len();
+        let cap = self.fanout_cap as usize;
+        let len = self.timeline_len as usize;
+        let (fol_off, fol) = self.followers();
+
+        // Posts per author, as (created_at, post_id).
+        let mut by_author: Vec<Vec<(i64, u64)>> = vec![Vec::new(); n];
+        for p in &self.posts {
+            by_author[p.author as usize].push((p.created_at_ms, p.id));
+        }
+
+        let mut offsets = Vec::with_capacity(n + 1);
+        let mut out = Vec::with_capacity(n * len);
+        offsets.push(0u32);
+        let mut buf: Vec<(i64, u64)> = Vec::new();
+        for u in 0..n as u64 {
+            buf.clear();
+            for &a in self.following(u) {
+                let followers =
+                    &fol[fol_off[a as usize] as usize..fol_off[a as usize + 1] as usize];
+                // Followers are sorted ascending; honour fanout_cap.
+                if followers.len() > cap && followers.partition_point(|&f| f < u) >= cap {
+                    continue;
+                }
+                buf.extend_from_slice(&by_author[a as usize]);
+            }
+            let newest_first = |x: &(i64, u64), y: &(i64, u64)| y.cmp(x);
+            if buf.len() > len {
+                buf.select_nth_unstable_by(len, newest_first);
+                buf.truncate(len);
+            }
+            buf.sort_unstable_by(newest_first);
+            out.extend(buf.iter().map(|&(_, id)| id));
+            offsets.push(u32::try_from(out.len()).expect("too many timeline entries"));
         }
         (offsets, out)
     }
@@ -437,5 +479,27 @@ pub(crate) mod tests {
             assert!((40..=280).contains(&b.len()) && b.is_ascii());
         }
         assert_eq!(d.tag_names[7], "tag0007");
+    }
+
+    #[test]
+    fn timelines_are_newest_followee_posts() {
+        let mut cfg = small_cfg(5);
+        cfg.dataset.timeline_len = 30;
+        let d = Dataset::generate(&cfg);
+        let (off, tl) = d.timelines();
+        for u in [0u64, 1, 17, 499] {
+            let got = &tl[off[u as usize] as usize..off[u as usize + 1] as usize];
+            // Brute force: all followee posts, newest first, top 30.
+            let f = d.following(u);
+            let mut all: Vec<(i64, u64)> = d
+                .posts
+                .iter()
+                .filter(|p| f.contains(&p.author))
+                .map(|p| (p.created_at_ms, p.id))
+                .collect();
+            all.sort_by(|a, b| b.cmp(a));
+            let want: Vec<u64> = all.iter().take(30).map(|x| x.1).collect();
+            assert_eq!(got, &want[..], "user {u}");
+        }
     }
 }
