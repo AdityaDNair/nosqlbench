@@ -78,6 +78,30 @@ pub struct RunConfig {
 pub struct CpuConfig {
     pub worker_cpus: Vec<usize>,
     pub aggregator_cpu: i64,
+    /// Windows thread priority for worker threads. Raised by default so other
+    /// normal-priority threads cannot take a worker's CPU for a full quantum.
+    pub worker_priority: ThreadPriority,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadPriority {
+    Normal,
+    AboveNormal,
+    Highest,
+    TimeCritical,
+}
+
+impl ThreadPriority {
+    /// Win32 THREAD_PRIORITY_* value.
+    pub fn win32(self) -> i32 {
+        match self {
+            ThreadPriority::Normal => 0,
+            ThreadPriority::AboveNormal => 1,
+            ThreadPriority::Highest => 2,
+            ThreadPriority::TimeCritical => 15,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

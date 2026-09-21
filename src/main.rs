@@ -1,13 +1,14 @@
-// Temporary: M1 defines items that the engine (M2) and loaders (M3+) consume.
-#![allow(dead_code)]
-
+mod adapters;
 mod config;
 mod cpu;
 mod dataset;
+mod output;
+mod telemetry;
+mod worker;
 mod workload;
 
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -27,8 +28,9 @@ enum Cmd {
     Load(LoadArgs),
     /// Run the workload against a database.
     Run(RunArgs),
-    /// No-op calibration: engine overhead and ceiling throughput.
-    Calibrate(CommonArgs),
+    /// No-op calibration (closed, concurrency 128 unless overridden):
+    /// engine overhead and ceiling throughput.
+    Calibrate(CalibrateArgs),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -110,6 +112,23 @@ struct LoadArgs {
     common: CommonArgs,
 }
 
+#[derive(Args, Clone)]
+struct OutputArgs {
+    /// Results root directory.
+    #[arg(long, default_value = "results")]
+    out: PathBuf,
+    /// Level label for the output directory (default: concurrency in closed
+    /// mode, rate in open mode).
+    #[arg(long)]
+    level: Option<String>,
+    /// Run number for the output directory.
+    #[arg(long, default_value_t = 1)]
+    run: u32,
+    /// Overwrite an existing result directory.
+    #[arg(long)]
+    force: bool,
+}
+
 #[derive(Args)]
 struct RunArgs {
     #[arg(long, value_enum)]
@@ -119,6 +138,16 @@ struct RunArgs {
     dry_run: bool,
     #[command(flatten)]
     common: CommonArgs,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Args)]
+struct CalibrateArgs {
+    #[command(flatten)]
+    common: CommonArgs,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 fn main() -> Result<()> {
@@ -133,10 +162,67 @@ fn main() -> Result<()> {
             if a.dry_run {
                 return dry_run(a.db, &cfg);
             }
-            bail!("`bench run` is not implemented yet (M2)")
+            run(a.db, &cfg, &a.output)
         }
-        Cmd::Calibrate(_) => bail!("`bench calibrate` is not implemented yet (M2)"),
+        Cmd::Calibrate(mut a) => {
+            // Calibration defaults, applied before user overrides so those win.
+            let mut set = vec![
+                "run.mode=\"closed\"".to_string(),
+                "run.concurrency=128".into(),
+            ];
+            set.append(&mut a.common.set);
+            a.common.set = set;
+            if a.common.mode.is_some() || a.common.concurrency.is_some() {
+                // Named flags are applied before --set; move them after.
+                if let Some(m) = a.common.mode.take() {
+                    a.common.set.push(format!("run.mode=\"{m}\""));
+                }
+                if let Some(c) = a.common.concurrency.take() {
+                    a.common.set.push(format!("run.concurrency={c}"));
+                }
+            }
+            let cfg = a.common.load_config()?;
+            run(Db::Noop, &cfg, &a.output)
+        }
     }
+}
+
+fn run(db: Db, cfg: &Config, out: &OutputArgs) -> Result<()> {
+    let _timer = cpu::TimerResolution::one_ms()?;
+    let topo = cpu::detect_topology()?;
+    let plan = cpu::plan(cfg, &topo)?;
+    plan.print();
+    println!("  worker thread priority: {:?}", cfg.cpu.worker_priority);
+    let level = out.level.clone().unwrap_or_else(|| match cfg.run.mode {
+        config::Mode::Closed => cfg.run.concurrency.to_string(),
+        config::Mode::Open => cfg.run.rate.to_string(),
+    });
+    let id = output::RunId {
+        db: db.name().to_string(),
+        mode: cfg.run.mode.as_str().to_string(),
+        level,
+        run: out.run,
+    };
+    let dir = id.dir(&out.out);
+    if dir.join("summary.csv").exists() && !out.force {
+        bail!(
+            "{} already has results; pass --force to overwrite",
+            dir.display()
+        );
+    }
+    let sys = output::SysInfo::collect();
+    let start = SystemTime::now();
+    let res = match db {
+        Db::Noop => worker::run_engine::<adapters::noop::Noop>(cfg, &plan)?,
+        other => bail!("adapter `{}` is not implemented yet", other.name()),
+    };
+    let rows = output::write_run(&dir, &id, cfg, &plan, &res, &sys, start, true)?;
+    output::print_table(&id, &rows, &res, cfg.run.mode == config::Mode::Open);
+    println!("results: {}", dir.display());
+    if res.dropped > 0 {
+        bail!("{} telemetry records dropped: run is invalid", res.dropped);
+    }
+    Ok(())
 }
 
 fn dry_run(db: Db, cfg: &Config) -> Result<()> {

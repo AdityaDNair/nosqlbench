@@ -117,6 +117,9 @@ pub fn detect_topology() -> Result<Topology> {
     Ok(Topology { cores, uniform })
 }
 
+/// Why the auto plan leaves the P-core holding logical CPU 0 alone.
+pub const SKIP_CPU0_REASON: &str = "P-core 0 skipped for workers: Windows routes most device interrupts and DPCs to logical CPU 0, which would add jitter to a worker pinned there";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PinPlan {
     /// Logical CPU for each worker thread, index = worker id.
@@ -126,11 +129,18 @@ pub struct PinPlan {
     pub e_core_cpus: Vec<Vec<usize>>,
     pub uniform_cores: bool,
     pub workers_requested: u32,
+    /// P-cores excluded from the auto worker pool, and why.
+    pub skipped_p_cores: Vec<Vec<usize>>,
+    pub skip_reason: Option<String>,
     pub note: String,
 }
 
-/// Build the pinning plan. Worker count = min(run.workers, P-cores), further
-/// capped at concurrency in closed mode, or at `cpu.worker_cpus.len()` when set.
+/// Build the pinning plan.
+///
+/// Auto mode: one worker per P-core (its lowest logical CPU), skipping the
+/// P-core that holds logical CPU 0 when at least one other P-core exists.
+/// Worker count = min(run.workers, available CPUs), further capped at
+/// concurrency in closed mode.
 pub fn plan(cfg: &Config, topo: &Topology) -> Result<PinPlan> {
     let p = topo.p_cores();
     let e = topo.e_cores();
@@ -138,16 +148,20 @@ pub fn plan(cfg: &Config, topo: &Topology) -> Result<PinPlan> {
         bail!("no cores detected");
     }
     let n_logical: usize = topo.cores.iter().map(|c| c.logical.len()).sum();
-
-    let mut n = (cfg.run.workers as usize).min(p.len());
-    if cfg.run.mode == crate::config::Mode::Closed {
-        n = n.min(cfg.run.concurrency as usize);
-    }
     let mut notes = Vec::new();
+    let mut skipped_p_cores = Vec::new();
+    let mut skip_reason = None;
 
-    let worker_cpus: Vec<usize> = if cfg.cpu.worker_cpus.is_empty() {
-        // Lowest logical CPU of each P-core: one thread per physical core.
-        p.iter().take(n).map(|c| c.logical[0]).collect()
+    let pool: Vec<usize> = if cfg.cpu.worker_cpus.is_empty() {
+        let (with0, rest): (Vec<&&PhysicalCore>, Vec<&&PhysicalCore>) =
+            p.iter().partition(|c| c.logical.contains(&0));
+        if !with0.is_empty() && !rest.is_empty() {
+            skipped_p_cores = with0.iter().map(|c| c.logical.clone()).collect();
+            skip_reason = Some(SKIP_CPU0_REASON.to_string());
+            rest.iter().map(|c| c.logical[0]).collect()
+        } else {
+            p.iter().map(|c| c.logical[0]).collect()
+        }
     } else {
         for &c in &cfg.cpu.worker_cpus {
             if c >= n_logical {
@@ -155,8 +169,14 @@ pub fn plan(cfg: &Config, topo: &Topology) -> Result<PinPlan> {
             }
         }
         notes.push("worker CPUs set explicitly".to_string());
-        cfg.cpu.worker_cpus.iter().copied().take(n).collect()
+        cfg.cpu.worker_cpus.clone()
     };
+
+    let mut n = (cfg.run.workers as usize).min(pool.len());
+    if cfg.run.mode == crate::config::Mode::Closed {
+        n = n.min(cfg.run.concurrency as usize);
+    }
+    let worker_cpus: Vec<usize> = pool.into_iter().take(n).collect();
     if (worker_cpus.len() as u32) < cfg.run.workers {
         notes.push(format!(
             "workers capped {} -> {}",
@@ -195,6 +215,8 @@ pub fn plan(cfg: &Config, topo: &Topology) -> Result<PinPlan> {
         e_core_cpus: e.iter().map(|c| c.logical.clone()).collect(),
         uniform_cores: topo.uniform,
         workers_requested: cfg.run.workers,
+        skipped_p_cores,
+        skip_reason,
         note: notes.join("; "),
     })
 }
@@ -220,6 +242,9 @@ impl PinPlan {
             println!("  worker {i} -> logical CPU {c}");
         }
         println!("  aggregator -> logical CPU {}", self.aggregator_cpu);
+        if let Some(r) = &self.skip_reason {
+            println!("  skipped {}: {r}", fmt_cores(&self.skipped_p_cores));
+        }
         if !self.note.is_empty() {
             println!("  note: {}", self.note);
         }
@@ -244,6 +269,16 @@ pub fn pin_current(cpu: usize) -> Result<()> {
     } else {
         bail!("failed to pin thread to logical CPU {cpu}")
     }
+}
+
+/// Raise the calling thread's scheduling priority (0 = normal, 2 = highest,
+/// 15 = time critical).
+pub fn set_thread_priority(level: i32) -> Result<()> {
+    use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY};
+    // SAFETY: GetCurrentThread returns a pseudo-handle for this thread that
+    // needs no closing; SetThreadPriority takes it plus an integer level.
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY(level))? };
+    Ok(())
 }
 
 /// RAII guard: 1 ms system timer resolution for the lifetime of the value.
@@ -311,17 +346,37 @@ mod tests {
             (0, &[7]),
         ]);
         let p = plan(&cfg(4), &t).unwrap();
-        assert_eq!(p.worker_cpus, vec![0, 2, 4]);
+        assert_eq!(p.worker_cpus, vec![2, 4]);
         assert_eq!(p.aggregator_cpu, 6);
+        assert_eq!(p.skipped_p_cores, vec![vec![0, 1]]);
+        assert!(p.skip_reason.is_some());
     }
 
     #[test]
     fn uniform_plan_uses_sibling_of_last_core_for_aggregator() {
         let t = topo(&[(0, &[0, 1]), (0, &[2, 3])]);
         let p = plan(&cfg(4), &t).unwrap();
-        assert_eq!(p.worker_cpus, vec![0, 2]);
+        assert_eq!(p.worker_cpus, vec![2]);
         assert_eq!(p.aggregator_cpu, 3);
         assert!(p.uniform_cores);
+    }
+
+    #[test]
+    fn single_p_core_is_not_skipped() {
+        let t = topo(&[(1, &[0, 1]), (0, &[2])]);
+        let p = plan(&cfg(4), &t).unwrap();
+        assert_eq!(p.worker_cpus, vec![0]);
+        assert!(p.skip_reason.is_none());
+    }
+
+    #[test]
+    fn explicit_worker_cpus_are_used_as_given() {
+        let t = topo(&[(1, &[0, 1]), (1, &[2, 3]), (0, &[4])]);
+        let mut c = cfg(4);
+        c.cpu.worker_cpus = vec![0, 1, 2];
+        let p = plan(&c, &t).unwrap();
+        assert_eq!(p.worker_cpus, vec![0, 1, 2]);
+        assert!(p.skip_reason.is_none());
     }
 
     #[test]

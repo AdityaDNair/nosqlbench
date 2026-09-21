@@ -31,6 +31,7 @@ ring_slots = 1_048_576
 [cpu]
 worker_cpus = []      # empty = auto: one logical CPU per physical P-core
 aggregator_cpu = -1   # -1 = auto: first E-core, else last P-core
+worker_priority = "highest"  # "normal" | "above_normal" | "highest" | "time_critical"
 
 [endpoints]
 redis = "redis://127.0.0.1:6379"

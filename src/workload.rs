@@ -4,7 +4,7 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use crate::config::Config;
-use crate::dataset::{draw_tags, BodyArena, Fnv, ZipfIds, DAY_MS, EPOCH_MS};
+use crate::dataset::{draw_tags, BodyArena, ZipfIds, DAY_MS, EPOCH_MS};
 
 /// Ops per worker stream (cycled with a wrapping cursor).
 pub const OPS_PER_WORKER: usize = 1 << 20;
@@ -43,15 +43,15 @@ impl OpKind {
             OpKind::UserFollow => "USER_FOLLOW",
         }
     }
-
-    pub fn from_u8(v: u8) -> Option<OpKind> {
-        OpKind::ALL.get(v as usize).copied()
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Op {
     pub kind: OpKind,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the database adapters (M3+)")
+    )]
     pub user: u64,
     pub target: u64,
     pub body: u32,
@@ -148,8 +148,9 @@ impl OpStream {
         OpStream { ops, bodies }
     }
 
+    #[cfg(test)]
     pub fn fingerprint(&self) -> u64 {
-        let mut h = Fnv::new();
+        let mut h = crate::dataset::Fnv::new();
         for o in &self.ops {
             h.u64(o.kind as u64);
             h.u64(o.user);

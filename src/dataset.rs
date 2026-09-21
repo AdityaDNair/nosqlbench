@@ -100,10 +100,6 @@ impl BodyArena {
         self.offsets.len().saturating_sub(1)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// Body `i` as `&str`. Arena contents are ASCII by construction.
     #[inline]
     pub fn get(&self, i: u32) -> &str {
@@ -191,7 +187,9 @@ pub struct Dataset {
     pub posts: Vec<Post>,
     /// Body of post `i` is `bodies.get(i)`.
     pub bodies: BodyArena,
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loaders (M3+)"))]
     pub tag_names: Vec<String>,
+    #[expect(dead_code, reason = "used by the loaders (M3+)")]
     pub fanout_cap: u32,
 }
 
@@ -271,6 +269,7 @@ impl Dataset {
         }
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loaders (M3+)"))]
     pub fn following(&self, u: u64) -> &[u64] {
         let a = self.follow_offsets[u as usize] as usize;
         let b = self.follow_offsets[u as usize + 1] as usize;
@@ -278,6 +277,7 @@ impl Dataset {
     }
 
     /// Reverse adjacency (followers of each user) in CSR form, follower ids ascending.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by the loaders (M3+)"))]
     pub fn followers(&self) -> (Vec<u32>, Vec<u64>) {
         let n = self.users.len();
         let mut counts = vec![0u32; n + 1];
