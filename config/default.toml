@@ -1,0 +1,41 @@
+seed = 42
+
+[dataset]
+users = 10_000
+posts = 100_000
+avg_follows = 20
+hashtags = 1_000
+max_tags_per_post = 3
+zipf_s = 0.99
+fanout_cap = 10_000
+
+[workload]            # weights, normalised at load time
+timeline_read = 40
+user_profile_read = 25
+post_like = 15
+post_create = 10
+hashtag_search = 5
+user_follow = 5
+
+[run]
+mode = "closed"       # "closed" | "open"
+concurrency = 32      # closed: total in-flight across all workers
+rate = 0              # open: total target ops/s
+max_inflight = 1024   # open: in-flight cap across all workers
+warmup_secs = 15
+measure_secs = 60
+request_timeout_ms = 5000
+workers = 4           # capped at available physical P-cores
+ring_slots = 1_048_576
+
+[cpu]
+worker_cpus = []      # empty = auto: one logical CPU per physical P-core
+aggregator_cpu = -1   # -1 = auto: first E-core, else last P-core
+
+[endpoints]
+redis = "redis://127.0.0.1:6379"
+mongo = "mongodb://127.0.0.1:27017"
+cassandra = "127.0.0.1:9042"
+neo4j = "127.0.0.1:7687"
+neo4j_user = "neo4j"
+neo4j_pass = "benchpass"
