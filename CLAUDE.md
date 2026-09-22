@@ -248,9 +248,16 @@ default pool unless noted: redis-rs 1 multiplexed connection
 (`drivers.redis_connections`, also used by redis-ping); mongodb 3.9 up to 10
 connections, one request each; scylla 1.9 against Cassandra 1 connection with
 up to 32,768 multiplexed streams; neo4rs 0.8 up to 16 connections, one query
-each. *Decision (M3):* Redis stays at 1: same-boot closed c=128 gave 20,799
-ops/s, p50 4.69 ms, p99 25.4 ms with 1 connection vs 16,110 ops/s, p50 6.23 ms,
-p99 29.4 ms with 4 (`results\fairness\`).
+each. Same-boot closed c=128 checks (`results\fairness\`), keep the setting
+unless the alternative clearly helps:
+- *Redis (M3):* 1 connection 20,799 ops/s, p50 4.69 ms, p99 25.4 ms vs 4
+  connections 16,110 ops/s, p50 6.23 ms, p99 29.4 ms → keep 1.
+- *MongoDB (M4):* pool 10 (driver default) 5,997 ops/s, p50 18.4 ms, p99
+  63.1 ms vs pool 32 (one per loop) 5,955 ops/s, p50 17.1 ms, p99 84.6 ms →
+  keep 10 (`drivers.mongo_max_pool_size`).
+- *Cassandra (M4):* 1 connection 26,319 ops/s, p50 3.39 ms, p99 21.2 ms vs 4
+  connections 22,139 ops/s, p50 3.96 ms, p99 26.3 ms → keep 1
+  (`drivers.cassandra_connections`).
 
 `redis_ping.rs`: sends `PING` for every op regardless of kind. Measures the
 round trip Windows → Docker VM → container → back, i.e. the transport floor
