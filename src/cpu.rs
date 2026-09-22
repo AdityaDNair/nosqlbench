@@ -281,6 +281,26 @@ pub fn set_thread_priority(level: i32) -> Result<()> {
     Ok(())
 }
 
+/// CPU affinity mask of another process (e.g. the Docker VM's `vmmemWSL`).
+/// Windows denies this for the VM processes unless the caller is elevated;
+/// the error is returned so it can be recorded instead of guessed.
+pub fn process_affinity_mask(pid: u32) -> Result<u64> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        GetProcessAffinityMask, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: OpenProcess returns an owned handle (or an error) that is closed
+    // below; GetProcessAffinityMask writes two usize values we own.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)?;
+        let (mut proc_mask, mut sys_mask) = (0usize, 0usize);
+        let r = GetProcessAffinityMask(h, &mut proc_mask, &mut sys_mask);
+        let _ = CloseHandle(h);
+        r?;
+        Ok(proc_mask as u64)
+    }
+}
+
 /// RAII guard: 1 ms system timer resolution for the lifetime of the value.
 pub struct TimerResolution {
     active: bool,

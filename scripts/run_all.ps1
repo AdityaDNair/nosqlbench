@@ -9,7 +9,6 @@ param(
     # Comma-separated (a string so it survives `powershell -File`).
     [string]$Dbs = 'redis,mongo,cassandra,neo4j',
     [int]$Runs = 3,
-    [switch]$NoVmAffinity,
     [switch]$Force
 )
 
@@ -47,7 +46,6 @@ for ($r = 1; $r -le $Runs; $r++) {
 }
 
 $common = @{ Runs = $Runs }
-if ($NoVmAffinity) { $common['NoVmAffinity'] = $true }
 if ($Force) { $common['Force'] = $true }
 
 & (Join-Path $PSScriptRoot 'run_db.ps1') -Db 'redis-ping' @common
@@ -57,7 +55,6 @@ foreach ($db in $dbList) {
 
 # Celebrity scenario: most-followed users are also the most active.
 $celeb = @{ Scenario = 'celebrity'; Levels = '8,32'; Runs = 1; NoOpen = $true; MeasureSecs = 60 }
-if ($NoVmAffinity) { $celeb['NoVmAffinity'] = $true }
 if ($Force) { $celeb['Force'] = $true }
 foreach ($db in $dbList) {
     & (Join-Path $PSScriptRoot 'run_db.ps1') -Db $db @celeb

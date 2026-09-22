@@ -4,6 +4,10 @@
   so it never shares a physical core with the benchmark workers.
 
 .DESCRIPTION
+  NOT USED BY DEFAULT. The affinity was tested with affinity_ab.ps1 and
+  rejected in M3 (see CLAUDE.md section 11); run_db.ps1 no longer applies it.
+  Kept for reproducing that experiment.
+
   Must run in an Administrator PowerShell (Windows denies non-elevated access
   to the VM process). Sets ProcessorAffinity, reads it back, and writes
   .vm_affinity.json in the repo root with the mask and VM PIDs. run_db.ps1 and

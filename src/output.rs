@@ -78,7 +78,17 @@ fn vm_affinity(running: serde_json::Value) -> serde_json::Value {
         .unwrap_or_default();
     let running_pids = pids(&running);
     let in_effect = !running_pids.is_empty() && running_pids.iter().all(|p| pinned.contains(p));
+    // The actual mask of each VM process, read directly (needs elevation).
+    let actual: Vec<serde_json::Value> = running_pids
+        .iter()
+        .map(|&pid| match crate::cpu::process_affinity_mask(pid as u32) {
+            Ok(m) => json!({ "pid": pid, "mask": format!("0x{m:X}") }),
+            Err(e) => json!({ "pid": pid, "mask": null, "error": e.to_string() }),
+        })
+        .collect();
     json!({
+        "policy": "no VM affinity (tested and rejected in M3; see CLAUDE.md section 11)",
+        "actual_masks": actual,
         "in_effect": in_effect,
         "mask": if in_effect { state.as_ref().and_then(|s| s.get("mask")).cloned() } else { None },
         "state_file": state,

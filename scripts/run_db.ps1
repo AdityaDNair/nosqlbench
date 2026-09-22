@@ -1,19 +1,15 @@
 <#
 .SYNOPSIS
-  Full sweep for one database: up -> healthy -> VM affinity check -> load ->
-  closed sweep -> open sweep -> down -v.
+  Full sweep for one database: up -> healthy -> load -> closed sweep ->
+  open sweep -> down -v.
+
+  No Docker VM CPU affinity is applied: it was tested (scripts\affinity_ab.ps1)
+  and rejected in M3. bench records the VM's actual mask in meta.json when it
+  can read it (reading needs elevation; otherwise the error is recorded).
 
 .PARAMETER Db
   redis | redis-ping | mongo | cassandra | neo4j. redis-ping runs inside the
   redis profile, loads nothing and only runs the closed sweep.
-.PARAMETER NoVmAffinity
-  Run without the Docker VM CPU affinity (see set_vm_affinity.ps1). Recorded in
-  meta.json via system.vm_affinity.
-
-  VM affinity: if this script runs elevated, it (re)applies the affinity itself
-  after the container is healthy, so a VM restart (e.g. Docker Desktop Resource
-  Saver stopping the idle VM) cannot silently drop it. If not elevated, it
-  requires .vm_affinity.json to cover every running VM process.
 .PARAMETER KeepUp
   Leave the container running at the end (default: down -v).
 .PARAMETER Force
@@ -39,7 +35,6 @@ param(
     [int]$Runs = 3,
     [string]$OpenPercents = '50,80,95',
     [string]$Out = 'results',
-    [switch]$NoVmAffinity,
     [switch]$KeepUp,
     [switch]$Force,
     [ValidateSet('normal', 'celebrity')]
@@ -98,24 +93,6 @@ function Wait-Healthy {
     }
 }
 
-# The VM affinity must have been set (elevated) for the currently running VM.
-function Assert-VmAffinity {
-    $stateFile = Join-Path $root '.vm_affinity.json'
-    if (-not (Test-Path $stateFile)) {
-        throw 'Docker VM CPU affinity is not set. Run scripts\set_vm_affinity.ps1 in an Administrator PowerShell, or pass -NoVmAffinity.'
-    }
-    $state = Get-Content $stateFile -Raw | ConvertFrom-Json
-    $running = @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue)
-    if ($running.Count -eq 0) { throw 'No vmmem / vmmemWSL process found.' }
-    $pinned = @($state.processes | ForEach-Object { [int]$_.pid })
-    foreach ($p in $running) {
-        if ($pinned -notcontains $p.Id) {
-            throw "$($p.Name) pid $($p.Id) is not covered by .vm_affinity.json (the VM restarted?). Re-run scripts\set_vm_affinity.ps1 elevated."
-        }
-    }
-    Write-Host "Docker VM affinity $($state.mask) in effect (set $($state.set_at))"
-}
-
 function Get-AllThroughput {
     param([string]$Dir)
     $row = Import-Csv (Join-Path $Dir 'summary.csv') | Where-Object { $_.op -eq 'ALL' }
@@ -133,7 +110,6 @@ function Get-Median {
 $composeProfile = if ($Db -eq 'redis-ping') { 'redis' } else { $Db }
 $container = "nosqlbench-$composeProfile"
 $extraArgs = @('--set', "workload.scenario=`"$Scenario`"")
-if (-not $NoVmAffinity) { $extraArgs += @('--require-vm-affinity') }
 if ($Force) { $extraArgs += @('--force') }
 if ($WarmupSecs -ge 0) { $extraArgs += @('--warmup-secs', "$WarmupSecs") }
 if ($MeasureSecs -ge 1) { $extraArgs += @('--measure-secs', "$MeasureSecs") }
@@ -144,14 +120,8 @@ if (-not (Test-Path $bench)) { Invoke-Native 'cargo' @('build', '--release') }
 Invoke-Native 'docker' @('compose', '--profile', $composeProfile, 'up', '-d')
 try {
     Wait-Healthy $container
-    if ($NoVmAffinity) {
-        Write-Warning 'Running WITHOUT Docker VM CPU affinity (-NoVmAffinity).'
-    } else {
-        $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-        if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-            & (Join-Path $PSScriptRoot 'set_vm_affinity.ps1')
-        }
-        Assert-VmAffinity
+    if (Test-Path (Join-Path $root '.vm_affinity.json')) {
+        Write-Warning '.vm_affinity.json exists: a VM affinity may still be applied. The default is no affinity; run scripts\set_vm_affinity.ps1 -Reset (elevated) to clear it.'
     }
 
     if ($Db -ne 'redis-ping') {

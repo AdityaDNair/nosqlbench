@@ -472,19 +472,30 @@ Rels: `FOLLOWS{since}`, `POSTED`, `LIKED`, `TAGGED_WITH`. Likes exist only as
 - Neo4j env: `NEO4J_AUTH=neo4j/benchpass`, `NEO4J_server_memory_heap_max__size=2G`,
   `NEO4J_server_memory_heap_initial__size=2G`, `NEO4J_server_memory_pagecache_size=1G`.
 - Named volumes, removed with `down -v` after each database's sweep.
-- *Decision (M3):* the Docker VM process (`vmmem` / `vmmemWSL`) is pinned to
-  logical CPUs 0,1,10,11,12,13,14,15 (mask `0xFC03`) so it never shares a
-  physical core with the workers. Setting it needs Administrator:
-  `scripts\set_vm_affinity.ps1` is run once, elevated; it writes
-  `.vm_affinity.json` (mask, VM PIDs, read-back). `run_db.ps1` refuses to run
-  unless that file matches the running VM PIDs (or `-NoVmAffinity` is given,
-  which is recorded). `meta.json` records the affinity state under
-  `system.vm_affinity` and the Docker kernel under `system.docker_kernel`.
-  On this laptop Docker Desktop uses the WSL2 backend, so the containers run in
-  `vmmemWSL`. The affinity dies with the VM process: Docker Desktop's Resource
-  Saver stops an idle VM and the next container start gets a new, unpinned
-  `vmmemWSL` (observed in M3). Disable Resource Saver, or run `run_db.ps1`
-  elevated: it then re-applies the affinity after every container start.
+- *Decision (M3): no Docker VM CPU affinity.* Pinning the VM process
+  (`vmmem` / `vmmemWSL`) away from the worker cores was tested and rejected.
+  `scripts\affinity_ab.ps1` (elevated) ran redis-ping, closed, c=32, 60 s,
+  3 rounds interleaved (none, 0xFC03, 0x0C03 per round), same boot:
+
+  | VM mask | CPUs | ops/s | p50 µs | p99 µs | E-core load |
+  |---|---|---|---|---|---|
+  | none (all) | 0-15 | 73.1k-73.9k | 414-418 | 718-759 | 37-38% |
+  | 0xFC03 | 0,1,10,11,12-15 | 63.4k-68.3k | 451-485 | 788-895 | 43-50% |
+  | 0x0C03 | 0,1,10,11 | 70.8k-72.8k | 417-425 | 816-902 | 36-40% |
+
+  No affinity wins on throughput, p50, p99 and run-to-run variance; 0xFC03
+  pushes VM work onto the E-cores. Results: `results\vm_affinity\ab\`.
+  (Numbers differ between boots: redis-ping c=32 "none" was ~82k ops/s on the
+  previous boot, so only same-boot comparisons are meaningful.)
+  `run_db.ps1` / `run_all.ps1` neither apply nor require an affinity.
+  `set_vm_affinity.ps1`, `affinity_ab.ps1` and `bench --require-vm-affinity`
+  are kept to reproduce the experiment. Every run records the VM's actual mask
+  in `meta.json` (`system.vm_affinity.actual_masks`, via
+  `GetProcessAffinityMask`); Windows denies that read unless `bench` runs
+  elevated, in which case the access error is recorded instead of a mask.
+- Docker Desktop here uses the WSL2 backend (containers run in `vmmemWSL`,
+  recorded as `system.docker_kernel`). `.wslconfig` sets `vmIdleTimeout=-1`
+  and Resource Saver is off, so the VM is not restarted between databases.
 
 ---
 
@@ -492,8 +503,7 @@ Rels: `FOLLOWS{since}`, `POSTED`, `LIKED`, `TAGGED_WITH`. Likes exist only as
 
 1. `sysinfo.ps1` → abort if on battery (`Win32_Battery.BatteryStatus -ne 2`);
    record power scheme (`powercfg /getactivescheme`).
-2. `docker compose --profile <db> up -d`, poll `docker inspect` health until healthy,
-   then verify the VM CPU affinity (section 11).
+2. `docker compose --profile <db> up -d`, poll `docker inspect` health until healthy.
 3. `bench load --db <db>`.
 4. Closed mode at concurrency 1, 8, 32, 128 × 3 runs.
 5. Best closed-mode `ALL` throughput → open mode at 50%, 80%, 95% of it × 3 runs.
