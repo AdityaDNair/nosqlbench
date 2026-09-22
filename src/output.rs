@@ -177,7 +177,7 @@ impl SysInfo {
             docker_images,
             git_commit: cmd_out("git", &["rev-parse", "HEAD"]),
             git_dirty: Command::new("git")
-                .args(["status", "--porcelain"])
+                .args(["status", "--porcelain", "--", ".", ":(exclude)results"])
                 .output()
                 .ok()
                 .filter(|o| o.status.success())
