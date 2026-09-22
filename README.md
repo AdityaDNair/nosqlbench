@@ -106,7 +106,8 @@ binary, then runs: noop calibration ×3 → redis-ping transport sweep → Redis
 MongoDB → Cassandra → Neo4j (each: start container, wait healthy, load, closed
 c = 1/8/32/128 × 3 runs, open at 50/80/95% of the best closed throughput × 3
 runs, `down -v`) → a short celebrity run per database (c = 8 and 32, 1 run).
-Results go to `results\final\` (about 2.5 hours). Then:
+Results go to `results\final\` (about 2.5 hours, estimated from the
+validation-run timings). Then:
 
 ```powershell
 .venv\Scripts\python.exe plots\plot.py results\final
