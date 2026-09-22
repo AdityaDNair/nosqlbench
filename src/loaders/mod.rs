@@ -1,6 +1,8 @@
 //! Dataset loaders, one per database. Each regenerates the deterministic
 //! dataset from the config seed, so every database gets the same world.
 
+pub mod cassandra;
+pub mod mongo;
 pub mod redis;
 
 use std::time::Instant;

@@ -38,10 +38,12 @@ worker_priority = "highest"  # "normal" | "above_normal" | "highest" | "time_cri
 
 [drivers]
 redis_connections = 1 # multiplexed Redis connections per worker (round-robin)
+mongo_max_pool_size = 10   # MongoDB pool per worker (driver default 10)
+cassandra_connections = 1  # CQL connections per worker (driver default 1)
 
 [endpoints]
 redis = "redis://127.0.0.1:6379"
-mongo = "mongodb://127.0.0.1:27017"
+mongo = "mongodb://127.0.0.1:27018/?directConnection=true"
 cassandra = "127.0.0.1:9042"
 neo4j = "127.0.0.1:7687"
 neo4j_user = "neo4j"

@@ -230,6 +230,8 @@ fn run(db: Db, cfg: &Config, out: &OutputArgs) -> Result<()> {
         Db::Noop => worker::run_engine::<adapters::noop::Noop>(cfg, &plan)?,
         Db::RedisPing => worker::run_engine::<adapters::redis_ping::RedisPing>(cfg, &plan)?,
         Db::Redis => worker::run_engine::<adapters::redis::RedisAdapter>(cfg, &plan)?,
+        Db::Mongo => worker::run_engine::<adapters::mongo::MongoAdapter>(cfg, &plan)?,
+        Db::Cassandra => worker::run_engine::<adapters::cassandra::CassandraAdapter>(cfg, &plan)?,
         other => bail!("adapter `{}` is not implemented yet", other.name()),
     };
     // A VM restart during the run would drop the affinity: re-check the PIDs.
@@ -261,6 +263,8 @@ fn load(db: Db, cfg: &Config) -> Result<()> {
     let t = Instant::now();
     match db {
         Db::Redis => rt.block_on(loaders::redis::load(cfg, &ds))?,
+        Db::Mongo => rt.block_on(loaders::mongo::load(cfg, &ds))?,
+        Db::Cassandra => rt.block_on(loaders::cassandra::load(cfg, &ds))?,
         Db::Noop | Db::RedisPing => bail!("`{}` has no dataset to load", db.name()),
         other => bail!("loader for `{}` is not implemented yet", other.name()),
     }

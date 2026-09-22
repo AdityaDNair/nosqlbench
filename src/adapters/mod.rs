@@ -1,6 +1,8 @@
 //! Database adapters. Each worker builds its own instance inside its own
 //! runtime; workers are generic over `A: Adapter` (static dispatch).
 
+pub mod cassandra;
+pub mod mongo;
 pub mod noop;
 pub mod redis;
 pub mod redis_ping;

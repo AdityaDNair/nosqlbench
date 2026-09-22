@@ -117,6 +117,18 @@ if ($MeasureSecs -ge 1) { $extraArgs += @('--measure-secs', "$MeasureSecs") }
 Invoke-Native 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'sysinfo.ps1'), '-RequireAC')
 if (-not (Test-Path $bench)) { Invoke-Native 'cargo' @('build', '--release') }
 
+# Refuse to start if another process owns one of the profile's host ports:
+# the benchmark would silently talk to that process instead of the container.
+$ports = @{ redis = @(6379); mongo = @(27018); cassandra = @(9042); neo4j = @(7687, 7474) }
+foreach ($port in $ports[$composeProfile]) {
+    foreach ($c in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+        $owner = (Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue).ProcessName
+        if ($owner -notmatch '^(com\.docker\.backend|wslrelay|vpnkit|docker)') {
+            throw "Host port $port is already in use by $owner (pid $($c.OwningProcess)); stop it before running $Db."
+        }
+    }
+}
+
 Invoke-Native 'docker' @('compose', '--profile', $composeProfile, 'up', '-d')
 try {
     Wait-Healthy $container

@@ -133,7 +133,7 @@ redis_connections = 1 # multiplexed Redis connections per worker (round-robin)
 
 [endpoints]
 redis = "redis://127.0.0.1:6379"
-mongo = "mongodb://127.0.0.1:27017"
+mongo = "mongodb://127.0.0.1:27018/?directConnection=true"   # 27017 is taken by a native MongoDB service
 cassandra = "127.0.0.1:9042"
 neo4j = "127.0.0.1:7687"
 neo4j_user = "neo4j"
@@ -482,7 +482,10 @@ Rels: `FOLLOWS{since}`, `POSTED`, `LIKED`, `TAGGED_WITH`. Likes exist only as
 
 - Pin images: `redis:7.4`, `mongo:8.0`, `cassandra:5.0`, `neo4j:5.26-community`.
 - One profile per database: `docker compose --profile cassandra up -d`.
-- Publish ports on `127.0.0.1` only.
+- Publish ports on `127.0.0.1` only. Mongo is published on host port 27018
+  (*M4:* a native Windows MongoDB service owns 27017; the first Mongo load went
+  into it because `compose up` failed to bind). `run_db.ps1` checks that the
+  profile's host ports are free before `compose up` and names the owner if not.
 - Every service: `mem_limit: 4g`, `cpus: 6`, healthcheck. No `cpuset` (VM CPU
   numbering doesn't map to host cores).
 - Cassandra env: `MAX_HEAP_SIZE=2G`, `HEAP_NEWSIZE=400M`. Health:
