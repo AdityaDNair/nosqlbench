@@ -40,6 +40,7 @@ worker_priority = "highest"  # "normal" | "above_normal" | "highest" | "time_cri
 redis_connections = 1 # multiplexed Redis connections per worker (round-robin)
 mongo_max_pool_size = 10   # MongoDB pool per worker (driver default 10)
 cassandra_connections = 1  # CQL connections per worker (driver default 1)
+neo4j_max_connections = 16 # Bolt pool per worker (driver default 16)
 
 [endpoints]
 redis = "redis://127.0.0.1:6379"

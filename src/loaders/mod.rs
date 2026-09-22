@@ -3,6 +3,7 @@
 
 pub mod cassandra;
 pub mod mongo;
+pub mod neo4j;
 pub mod redis;
 
 use std::time::Instant;

@@ -31,6 +31,8 @@ pub struct DriverConfig {
     pub mongo_max_pool_size: u32,
     /// CQL connections per worker (each multiplexes many requests).
     pub cassandra_connections: u32,
+    /// Neo4j (Bolt) connection pool size per worker (one query per connection).
+    pub neo4j_max_connections: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,7 +228,11 @@ impl Config {
             bail!("run.ring_slots must be a power of two");
         }
         let dr = &self.drivers;
-        if dr.redis_connections < 1 || dr.mongo_max_pool_size < 1 || dr.cassandra_connections < 1 {
+        if dr.redis_connections < 1
+            || dr.mongo_max_pool_size < 1
+            || dr.cassandra_connections < 1
+            || dr.neo4j_max_connections < 1
+        {
             bail!("drivers.* connection counts must be >= 1");
         }
         if self.cpu.aggregator_cpu < -1 {

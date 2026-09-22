@@ -3,6 +3,7 @@
 
 pub mod cassandra;
 pub mod mongo;
+pub mod neo4j;
 pub mod noop;
 pub mod redis;
 pub mod redis_ping;

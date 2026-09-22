@@ -232,7 +232,7 @@ fn run(db: Db, cfg: &Config, out: &OutputArgs) -> Result<()> {
         Db::Redis => worker::run_engine::<adapters::redis::RedisAdapter>(cfg, &plan)?,
         Db::Mongo => worker::run_engine::<adapters::mongo::MongoAdapter>(cfg, &plan)?,
         Db::Cassandra => worker::run_engine::<adapters::cassandra::CassandraAdapter>(cfg, &plan)?,
-        other => bail!("adapter `{}` is not implemented yet", other.name()),
+        Db::Neo4j => worker::run_engine::<adapters::neo4j::Neo4jAdapter>(cfg, &plan)?,
     };
     // A VM restart during the run would drop the affinity: re-check the PIDs.
     let affinity_after = sys.recheck_vm_affinity();
@@ -265,8 +265,8 @@ fn load(db: Db, cfg: &Config) -> Result<()> {
         Db::Redis => rt.block_on(loaders::redis::load(cfg, &ds))?,
         Db::Mongo => rt.block_on(loaders::mongo::load(cfg, &ds))?,
         Db::Cassandra => rt.block_on(loaders::cassandra::load(cfg, &ds))?,
+        Db::Neo4j => rt.block_on(loaders::neo4j::load(cfg, &ds))?,
         Db::Noop | Db::RedisPing => bail!("`{}` has no dataset to load", db.name()),
-        other => bail!("loader for `{}` is not implemented yet", other.name()),
     }
     eprintln!("load complete in {:.1} s", t.elapsed().as_secs_f64());
     print_fanout_stats(cfg, &ds);

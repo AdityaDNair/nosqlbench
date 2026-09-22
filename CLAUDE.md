@@ -258,6 +258,10 @@ unless the alternative clearly helps:
 - *Cassandra (M4):* 1 connection 26,319 ops/s, p50 3.39 ms, p99 21.2 ms vs 4
   connections 22,139 ops/s, p50 3.96 ms, p99 26.3 ms → keep 1
   (`drivers.cassandra_connections`).
+- *Neo4j (M5):* pool 16 (driver default) 4,867 ops/s, p50 22.8 ms, p99 90.4 ms,
+  0 timeouts vs pool 32 4,703 ops/s, p50 10.9 ms, p99 442 ms, 16 timeouts
+  (the queue moves from the client pool to server-side write locks) → keep 16
+  (`drivers.neo4j_max_connections`).
 
 `redis_ping.rs`: sends `PING` for every op regardless of kind. Measures the
 round trip Windows → Docker VM → container → back, i.e. the transport floor
@@ -587,6 +591,8 @@ shows a new post in a follower's timeline.
 
 **M5 — Neo4j.**
 ✅ Same as M4. `EXPLAIN` of the timeline query uses the user_id constraint index.
+  (Verified: `NodeUniqueIndexSeek` on `User(user_id)`, the index owned by the
+  `user_id` constraint; plans saved in `results\neo4j_explain\`.)
 
 **M6 — Plots + README.**
 ✅ `python plots\plot.py results` produces per-op p50/p99 vs concurrency,
