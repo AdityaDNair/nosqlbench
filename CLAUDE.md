@@ -594,7 +594,22 @@ throughput vs concurrency, and open-mode latency CDFs with all four DBs on share
 axes, with the redis-ping floor drawn as a reference line on latency plots.
 README: one-command reproduction (`scripts\run_all.ps1`) and limitations
 (laptop scale, single node, Windows host + Docker VM transport overhead as
-measured by redis-ping, differing durability settings).
+measured by redis-ping, differing durability settings, and the host CPU
+contention below).
+
+*Limitation (M4 finding): the load generator and the Docker VM share host
+CPU.* Open-mode send lag at 50% load was 0.9 ms p99 for Redis but 4.1 ms
+(MongoDB) and 5.8 ms (Cassandra). Diagnostic, same session: the noop adapter
+in open mode at 12,644 ops/s (Cassandra's 50% rate) had send-lag p99 26 µs
+with the VM idle and 5,718 µs while `cassandra-stress` kept the container at
+~590% CPU. No driver was involved, so the lateness comes from the VM's vCPUs
+competing with the worker threads for physical cores, not from driver work.
+It scales with how much CPU the database uses (Redis ~1 core, Cassandra and
+MongoDB up to 6). Send lag is charged to latency, so open-mode tails of the
+CPU-heavy databases include a few ms of client-side delay; closed-mode
+latency is unaffected by send lag but shares the same CPU contention.
+Pinning the VM away from the workers was tested and made results worse
+(section 11). Engine settings were not changed.
 
 ---
 

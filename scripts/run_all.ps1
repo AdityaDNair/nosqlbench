@@ -34,6 +34,24 @@ function Invoke-Native {
     if ($code -ne 0) { throw "$Exe $($Arguments -join ' ') failed with exit code $code" }
 }
 
+# Pre-flight: Docker must be running and the benchmark ports must be free
+# (a leftover container or a native service would otherwise be measured).
+$prev = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+docker info --format '{{.ServerVersion}}' 2>$null | Out-Null
+$dockerExit = $LASTEXITCODE
+$ErrorActionPreference = $prev
+if ($dockerExit -ne 0) { throw 'Docker is not running (docker info failed). Start Docker Desktop first.' }
+$busyPorts = @()
+foreach ($port in 6379, 27018, 9042, 7687, 7474) {
+    foreach ($c in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+        $owner = (Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue).ProcessName
+        $busyPorts += "port $port in use by $owner (pid $($c.OwningProcess))"
+    }
+}
+if ($busyPorts.Count -gt 0) { throw ("Benchmark ports are not free: " + ($busyPorts -join '; ')) }
+Write-Host 'Pre-flight OK: Docker running; ports 6379, 27018, 9042, 7687, 7474 free.'
+
 Invoke-Native 'cargo' @('build', '--release')
 $bench = Join-Path $root 'target\release\bench.exe'
 $forceArg = @()
