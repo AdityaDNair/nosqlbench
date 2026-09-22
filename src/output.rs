@@ -107,7 +107,35 @@ $vm = @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue | ForEac
 [pscustomobject]@{ cpu = $c.Trim(); build = "$($os.Caption) $($os.BuildNumber).$ubr"; power = $p; vm = $vm } | ConvertTo-Json -Compress -Depth 3
 "#;
 
+/// Running Docker VM processes as `[{name, pid}]`.
+fn running_vm() -> serde_json::Value {
+    cmd_out(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-Command", RUNNING_VM_PS],
+    )
+    .and_then(|s| serde_json::from_str(&s).ok())
+    .unwrap_or(serde_json::Value::Null)
+}
+
+const RUNNING_VM_PS: &str = r#"
+ConvertTo-Json -Compress -InputObject @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ name = $_.Name; pid = $_.Id } })
+"#;
+
 impl SysInfo {
+    pub fn vm_affinity_in_effect(&self) -> bool {
+        self.vm_affinity["in_effect"].as_bool().unwrap_or(false)
+    }
+
+    /// Re-read the running VM processes after a run and record whether the
+    /// affinity still covers them (`in_effect_after_run`).
+    pub fn recheck_vm_affinity(&mut self) -> bool {
+        let after = vm_affinity(running_vm());
+        let ok = after["in_effect"].as_bool().unwrap_or(false);
+        self.vm_affinity["in_effect_after_run"] = serde_json::Value::Bool(ok);
+        self.vm_affinity["running_vm_after_run"] = after["running_vm"].clone();
+        ok
+    }
+
     pub fn collect() -> SysInfo {
         let ps: Option<serde_json::Value> = cmd_out(
             "powershell.exe",

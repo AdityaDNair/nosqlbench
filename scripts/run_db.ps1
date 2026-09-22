@@ -133,6 +133,7 @@ function Get-Median {
 $composeProfile = if ($Db -eq 'redis-ping') { 'redis' } else { $Db }
 $container = "nosqlbench-$composeProfile"
 $extraArgs = @('--set', "workload.scenario=`"$Scenario`"")
+if (-not $NoVmAffinity) { $extraArgs += @('--require-vm-affinity') }
 if ($Force) { $extraArgs += @('--force') }
 if ($WarmupSecs -ge 0) { $extraArgs += @('--warmup-secs', "$WarmupSecs") }
 if ($MeasureSecs -ge 1) { $extraArgs += @('--measure-secs', "$MeasureSecs") }

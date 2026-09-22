@@ -128,6 +128,10 @@ struct OutputArgs {
     /// Overwrite an existing result directory.
     #[arg(long)]
     force: bool,
+    /// Refuse to start unless the Docker VM CPU affinity covers every running
+    /// VM process, and fail the run if a VM process changed during it.
+    #[arg(long)]
+    require_vm_affinity: bool,
 }
 
 #[derive(Args)]
@@ -212,7 +216,15 @@ fn run(db: Db, cfg: &Config, out: &OutputArgs) -> Result<()> {
             dir.display()
         );
     }
-    let sys = output::SysInfo::collect();
+    let mut sys = output::SysInfo::collect();
+    let affinity_before = sys.vm_affinity_in_effect();
+    println!("  docker VM affinity in effect: {affinity_before}");
+    if out.require_vm_affinity && !affinity_before {
+        bail!(
+            "Docker VM CPU affinity is not in effect (running VM PIDs are not all covered by \
+             .vm_affinity.json); re-run scripts\\set_vm_affinity.ps1 elevated"
+        );
+    }
     let start = SystemTime::now();
     let res = match db {
         Db::Noop => worker::run_engine::<adapters::noop::Noop>(cfg, &plan)?,
@@ -220,9 +232,14 @@ fn run(db: Db, cfg: &Config, out: &OutputArgs) -> Result<()> {
         Db::Redis => worker::run_engine::<adapters::redis::RedisAdapter>(cfg, &plan)?,
         other => bail!("adapter `{}` is not implemented yet", other.name()),
     };
+    // A VM restart during the run would drop the affinity: re-check the PIDs.
+    let affinity_after = sys.recheck_vm_affinity();
     let rows = output::write_run(&dir, &id, cfg, &plan, &res, &sys, start, true)?;
     output::print_table(&id, &rows, &res, cfg.run.mode == config::Mode::Open);
     println!("results: {}", dir.display());
+    if out.require_vm_affinity && !affinity_after {
+        bail!("Docker VM processes changed during the run (affinity lost): run is invalid");
+    }
     if res.dropped > 0 {
         bail!("{} telemetry records dropped: run is invalid", res.dropped);
     }
