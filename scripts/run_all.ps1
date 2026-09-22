@@ -4,11 +4,17 @@
   mongo -> cassandra -> neo4j (scenario "normal"), then a short "celebrity"
   run per database (closed, c=8 and c=32, 1 run, 60 s). Each database runs
   alone (run_db.ps1 tears its container down with -v before the next starts).
+
+  This is the run that produces the final numbers: run it once, in a single
+  session (same boot), so every database is measured under the same host
+  conditions. Everything goes to -Out (default results\final): the noop
+  calibration and the redis-ping transport floor come first.
 #>
 param(
     # Comma-separated (a string so it survives `powershell -File`).
     [string]$Dbs = 'redis,mongo,cassandra,neo4j',
     [int]$Runs = 3,
+    [string]$Out = 'results\final',
     [switch]$Force
 )
 
@@ -42,10 +48,10 @@ if ($LASTEXITCODE -ne 0) { throw "docker ps failed with exit code $LASTEXITCODE"
 if ($running.Count -gt 0) { throw "Database containers already running: $($running -join ', '). Stop them first." }
 
 for ($r = 1; $r -le $Runs; $r++) {
-    Invoke-Native $bench (@('calibrate', '--run', "$r") + $forceArg)
+    Invoke-Native $bench (@('calibrate', '--run', "$r", '--out', $Out) + $forceArg)
 }
 
-$common = @{ Runs = $Runs }
+$common = @{ Runs = $Runs; Out = $Out }
 if ($Force) { $common['Force'] = $true }
 
 & (Join-Path $PSScriptRoot 'run_db.ps1') -Db 'redis-ping' @common
@@ -54,7 +60,7 @@ foreach ($db in $dbList) {
 }
 
 # Celebrity scenario: most-followed users are also the most active.
-$celeb = @{ Scenario = 'celebrity'; Levels = '8,32'; Runs = 1; NoOpen = $true; MeasureSecs = 60 }
+$celeb = @{ Scenario = 'celebrity'; Levels = '8,32'; Runs = 1; NoOpen = $true; MeasureSecs = 60; Out = $Out }
 if ($Force) { $celeb['Force'] = $true }
 foreach ($db in $dbList) {
     & (Join-Path $PSScriptRoot 'run_db.ps1') -Db $db @celeb

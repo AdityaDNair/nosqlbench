@@ -128,6 +128,9 @@ worker_cpus = []      # empty = auto: one logical CPU per physical P-core
 aggregator_cpu = -1   # -1 = auto: first E-core, else last P-core
 worker_priority = "highest"  # "normal" | "above_normal" | "highest" | "time_critical"
 
+[drivers]
+redis_connections = 1 # multiplexed Redis connections per worker (round-robin)
+
 [endpoints]
 redis = "redis://127.0.0.1:6379"
 mongo = "mongodb://127.0.0.1:27017"
@@ -240,6 +243,15 @@ pub trait Adapter {
 `noop.rs`: returns `Ok(())` after `std::hint::black_box(op)`. Measures engine
 overhead and ceiling throughput.
 
+*Connections per worker (M3/M4).* Each worker's client uses its driver's
+default pool unless noted: redis-rs 1 multiplexed connection
+(`drivers.redis_connections`, also used by redis-ping); mongodb 3.9 up to 10
+connections, one request each; scylla 1.9 against Cassandra 1 connection with
+up to 32,768 multiplexed streams; neo4rs 0.8 up to 16 connections, one query
+each. *Decision (M3):* Redis stays at 1: same-boot closed c=128 gave 20,799
+ops/s, p50 4.69 ms, p99 25.4 ms with 1 connection vs 16,110 ops/s, p50 6.23 ms,
+p99 29.4 ms with 4 (`results\fairness\`).
+
 `redis_ping.rs`: sends `PING` for every op regardless of kind. Measures the
 round trip Windows → Docker VM → container → back, i.e. the transport floor
 every database pays. Reported as its own result, never mixed into Redis numbers.
@@ -346,6 +358,12 @@ bits  1..0   reserved
 - `<op>.hgrm` — HdrHistogram percentile export.
 
 Print a short table to stdout at the end of each run.
+
+*Reporting (M3 decision):* closed mode is the primary comparison; open mode at
+50% is the headline latency-under-load figure. Wherever open-mode latency
+tails are shown (summary tables, plots), show send-lag p99 next to them:
+send lag rises at 80–95% load (Redis: p99 0.9 / 3.7 / 6.5 ms at 50 / 80 / 95%)
+and is charged to latency, so part of those tails is client-side.
 
 ---
 
@@ -517,6 +535,15 @@ scenario loads its own dataset; loaders record the loaded scenario and adapters
 refuse to run against a different one.
 
 Writes during runs mutate state; data is reloaded per database, not per run.
+
+*Validation vs final (M3 decision):* the per-milestone sweeps (M3–M5, under
+`results\normal\`, `results\celebrity\`) are validation runs. Numbers drift
+between boots (redis-ping c=32: ~82k vs ~74k ops/s) and even within a session
+when Windows background jobs run (Redis c=128: 30.1k in the M3 sweep vs 20.8k
+two hours later with BackgroundDownload and Disk Cleanup active). The final
+numbers come from one `run_all.ps1` in a single session, written to
+`results\final\` (noop calibration and redis-ping first). `sysinfo.ps1` warns
+about busy background processes before each database.
 
 Scripts must use `$ErrorActionPreference = 'Stop'` and check `$LASTEXITCODE`
 after every native command.

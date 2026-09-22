@@ -4,6 +4,7 @@
 //! One multiplexed connection per worker; the worker's request loops share it
 //! (requests are pipelined on the wire by the driver).
 
+use std::cell::Cell;
 use std::time::Duration;
 
 use redis::aio::MultiplexedConnection;
@@ -29,6 +30,35 @@ pub async fn connect(url: &str) -> anyhow::Result<MultiplexedConnection> {
         .await?)
 }
 
+/// `n` multiplexed connections used round-robin (single-threaded worker).
+pub struct Connections {
+    cons: Vec<MultiplexedConnection>,
+    next: Cell<usize>,
+}
+
+impl Connections {
+    pub async fn open(url: &str, n: u32) -> anyhow::Result<Connections> {
+        let mut cons = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            cons.push(connect(url).await?);
+        }
+        Ok(Connections {
+            cons,
+            next: Cell::new(0),
+        })
+    }
+
+    /// A handle to the next connection. Cloning a multiplexed connection only
+    /// clones its channel to the connection task.
+    #[inline]
+    pub fn pick(&self) -> MultiplexedConnection {
+        let i = self.next.get();
+        self.next
+            .set(if i + 1 == self.cons.len() { 0 } else { i + 1 });
+        self.cons[i].clone()
+    }
+}
+
 pub fn map_err(e: RedisError) -> AdapterError {
     if e.is_timeout() {
         AdapterError::Timeout
@@ -38,7 +68,7 @@ pub fn map_err(e: RedisError) -> AdapterError {
 }
 
 pub struct RedisAdapter {
-    con: MultiplexedConnection,
+    cons: Connections,
     /// `tag:tagNNNN` keys and `tagNNNN` names, precomputed.
     tag_keys: Vec<String>,
     tag_names: Vec<String>,
@@ -78,7 +108,8 @@ impl Adapter for RedisAdapter {
         let tag_names: Vec<String> = (0..cfg.dataset.hashtags)
             .map(|i| tag_name(i as u16))
             .collect();
-        let mut con = connect(&cfg.endpoints.redis).await?;
+        let cons = Connections::open(&cfg.endpoints.redis, cfg.drivers.redis_connections).await?;
+        let mut con = cons.pick();
         let want = cfg.workload.scenario.as_str();
         let loaded: Option<String> = redis::cmd("GET")
             .arg(crate::loaders::redis::SCENARIO_KEY)
@@ -92,7 +123,7 @@ impl Adapter for RedisAdapter {
             );
         }
         Ok(RedisAdapter {
-            con,
+            cons,
             tag_keys: tag_names.iter().map(|t| format!("tag:{t}")).collect(),
             tag_names,
             fanout_cap: cfg.dataset.fanout_cap as usize,
@@ -101,7 +132,7 @@ impl Adapter for RedisAdapter {
     }
 
     async fn execute(&self, op: &Op, bodies: &BodyArena) -> Result<(), AdapterError> {
-        let mut con = self.con.clone();
+        let mut con = self.cons.pick();
         match op.kind {
             OpKind::UserProfileRead => {
                 let _: Value = redis::cmd("HGETALL")

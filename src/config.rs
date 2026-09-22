@@ -17,7 +17,16 @@ pub struct Config {
     pub workload: WorkloadWeights,
     pub run: RunConfig,
     pub cpu: CpuConfig,
+    pub drivers: DriverConfig,
     pub endpoints: Endpoints,
+}
+
+/// Per-worker driver connection settings. Every worker builds its own client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriverConfig {
+    /// Multiplexed Redis connections per worker; loops pick one round-robin.
+    pub redis_connections: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +220,9 @@ impl Config {
         }
         if !r.ring_slots.is_power_of_two() {
             bail!("run.ring_slots must be a power of two");
+        }
+        if self.drivers.redis_connections < 1 {
+            bail!("drivers.redis_connections must be >= 1");
         }
         if self.cpu.aggregator_cpu < -1 {
             bail!("cpu.aggregator_cpu must be -1 (auto) or a logical CPU index");

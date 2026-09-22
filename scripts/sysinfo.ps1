@@ -36,6 +36,18 @@ $vm = @(Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue | ForEac
     'Docker VM proc' = $vm
 } | Format-Table -HideTableHeaders -AutoSize | Out-String | Write-Host
 
+# Busy background processes (e.g. Windows Update downloads, Disk Cleanup)
+# depress results; list anything above 20% of one core over 3 s.
+$before = @{}
+Get-Process | ForEach-Object { if ($_.CPU) { $before[$_.Id] = $_.CPU } }
+Start-Sleep -Seconds 3
+$busy = @(Get-Process | Where-Object { $_.CPU -and $before.ContainsKey($_.Id) } | ForEach-Object {
+        [pscustomobject]@{ Name = $_.ProcessName; Id = $_.Id; CpuPct = [math]::Round(($_.CPU - $before[$_.Id]) / 3 * 100, 0) }
+    } | Where-Object { $_.CpuPct -ge 20 } | Sort-Object CpuPct -Descending)
+if ($busy.Count -gt 0) {
+    Write-Warning ('Busy background processes (% of one core): ' + (($busy | ForEach-Object { "$($_.Name)[$($_.Id)] $($_.CpuPct)%" }) -join ', '))
+}
+
 if ($RequireAC -and $onBattery) {
     Write-Error 'Running on battery power: benchmark aborted. Plug in the charger.'
     exit 1
