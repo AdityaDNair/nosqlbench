@@ -47,6 +47,9 @@ services:
     environment:
       MAX_HEAP_SIZE: 2G
       HEAP_NEWSIZE: 400M
+      # Drivers reconnect to the address the node advertises; the container IP
+      # is unreachable from Windows, so advertise the published loopback port.
+      CASSANDRA_BROADCAST_RPC_ADDRESS: 127.0.0.1
     volumes: ["cassandra-data:/var/lib/cassandra"]
     healthcheck:
       test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces'"]

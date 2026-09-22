@@ -488,7 +488,9 @@ Rels: `FOLLOWS{since}`, `POSTED`, `LIKED`, `TAGGED_WITH`. Likes exist only as
   profile's host ports are free before `compose up` and names the owner if not.
 - Every service: `mem_limit: 4g`, `cpus: 6`, healthcheck. No `cpuset` (VM CPU
   numbering doesn't map to host cores).
-- Cassandra env: `MAX_HEAP_SIZE=2G`, `HEAP_NEWSIZE=400M`. Health:
+- Cassandra env: `MAX_HEAP_SIZE=2G`, `HEAP_NEWSIZE=400M`,
+  `CASSANDRA_BROADCAST_RPC_ADDRESS=127.0.0.1` (*M4:* the driver reconnects to
+  the advertised RPC address, which is otherwise the unreachable container IP). Health:
   `cqlsh -e 'describe keyspaces'`. `start_period: 120s`.
 - Neo4j env: `NEO4J_AUTH=neo4j/benchpass`, `NEO4J_server_memory_heap_max__size=2G`,
   `NEO4J_server_memory_heap_initial__size=2G`, `NEO4J_server_memory_pagecache_size=1G`.

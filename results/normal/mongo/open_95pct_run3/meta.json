@@ -1,0 +1,212 @@
+{
+  "scenario": "normal",
+  "db": "mongo",
+  "mode": "open",
+  "level": "95pct",
+  "run": 3,
+  "start_time_utc": "2026-09-22T12:48:56Z",
+  "config": {
+    "seed": 42,
+    "dataset": {
+      "users": 10000,
+      "posts": 100000,
+      "avg_follows": 20,
+      "hashtags": 1000,
+      "max_tags_per_post": 3,
+      "zipf_s": 0.99,
+      "fanout_cap": 10000,
+      "timeline_len": 800
+    },
+    "workload": {
+      "scenario": "normal",
+      "timeline_read": 40.0,
+      "user_profile_read": 25.0,
+      "post_like": 15.0,
+      "post_create": 10.0,
+      "hashtag_search": 5.0,
+      "user_follow": 5.0
+    },
+    "run": {
+      "mode": "open",
+      "concurrency": 32,
+      "rate": 5011,
+      "max_inflight": 1024,
+      "warmup_secs": 15,
+      "measure_secs": 60,
+      "request_timeout_ms": 5000,
+      "workers": 4,
+      "ring_slots": 1048576
+    },
+    "cpu": {
+      "worker_cpus": [],
+      "aggregator_cpu": -1,
+      "worker_priority": "highest"
+    },
+    "drivers": {
+      "redis_connections": 1,
+      "mongo_max_pool_size": 10,
+      "cassandra_connections": 1
+    },
+    "endpoints": {
+      "redis": "redis://127.0.0.1:6379",
+      "mongo": "mongodb://127.0.0.1:27018/?directConnection=true",
+      "cassandra": "127.0.0.1:9042",
+      "neo4j": "127.0.0.1:7687",
+      "neo4j_user": "neo4j",
+      "neo4j_pass": "benchpass"
+    }
+  },
+  "pinning": {
+    "worker_cpus": [
+      2,
+      4,
+      6,
+      8
+    ],
+    "aggregator_cpu": 12,
+    "p_core_cpus": [
+      [
+        0,
+        1
+      ],
+      [
+        2,
+        3
+      ],
+      [
+        4,
+        5
+      ],
+      [
+        6,
+        7
+      ],
+      [
+        8,
+        9
+      ],
+      [
+        10,
+        11
+      ]
+    ],
+    "e_core_cpus": [
+      [
+        12
+      ],
+      [
+        13
+      ],
+      [
+        14
+      ],
+      [
+        15
+      ]
+    ],
+    "uniform_cores": false,
+    "workers_requested": 4,
+    "skipped_p_cores": [
+      [
+        0,
+        1
+      ]
+    ],
+    "skip_reason": "P-core 0 skipped for workers: Windows routes most device interrupts and DPCs to logical CPU 0, which would add jitter to a worker pinned there",
+    "note": ""
+  },
+  "workers": [
+    {
+      "id": 0,
+      "cpu": 2,
+      "loops": 256,
+      "rate": 1252.75
+    },
+    {
+      "id": 1,
+      "cpu": 4,
+      "loops": 256,
+      "rate": 1252.75
+    },
+    {
+      "id": 2,
+      "cpu": 6,
+      "loops": 256,
+      "rate": 1252.75
+    },
+    {
+      "id": 3,
+      "cpu": 8,
+      "loops": 256,
+      "rate": 1252.75
+    }
+  ],
+  "system": {
+    "cpu_model": "13th Gen Intel(R) Core(TM) i7-13620H",
+    "windows_build": "Microsoft Windows 11 Home 26200.9457",
+    "power_source": "AC",
+    "power_scheme": "Power Scheme GUID: 6fecc5ae-f350-48a5-b669-b472cb895ccf  (Turbo)",
+    "docker_version": "29.8.0",
+    "docker_kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "docker_images": [
+      "mongo:8.0"
+    ],
+    "git_commit": "5a841089b754e3822df210bdfc8fac9c3e4af7e5",
+    "git_dirty": false,
+    "vm_affinity": {
+      "policy": "no VM affinity (tested and rejected in M3; see CLAUDE.md section 11)",
+      "actual_masks": [
+        {
+          "pid": 23204,
+          "mask": null,
+          "error": "Access is denied. (0x80070005)"
+        },
+        {
+          "pid": 6748,
+          "mask": null,
+          "error": "Access is denied. (0x80070005)"
+        }
+      ],
+      "in_effect": false,
+      "mask": null,
+      "state_file": null,
+      "running_vm": [
+        {
+          "name": "vmmem",
+          "pid": 23204
+        },
+        {
+          "name": "vmmemWSL",
+          "pid": 6748
+        }
+      ],
+      "in_effect_after_run": false,
+      "running_vm_after_run": [
+        {
+          "name": "vmmem",
+          "pid": 23204
+        },
+        {
+          "name": "vmmemWSL",
+          "pid": 6748
+        }
+      ]
+    }
+  },
+  "measure_elapsed_secs": 60.0001927,
+  "dropped_records": 0,
+  "records_drained": 751624,
+  "warmup_records_discarded": 149962,
+  "send_lag_us": {
+    "p50": 161.919,
+    "p99": 143261.695,
+    "p999": 239075.327,
+    "max": 265420.799
+  },
+  "first_errors": [],
+  "histogram": {
+    "low_ns": 1,
+    "high_ns": 60000000000,
+    "sigfig": 3
+  }
+}
