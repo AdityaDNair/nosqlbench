@@ -7,3 +7,4 @@
 /dumps/*
 !/dumps/README.md
 !/dumps/manifest.json
+nosqlbench_dumps.zip
