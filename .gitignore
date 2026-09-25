@@ -2,3 +2,8 @@
 /.venv
 *.hgrm
 .vm_affinity.json
+# Database dumps (~190 MB) are produced by scripts\make_dumps.ps1; only the
+# README and manifest are tracked.
+/dumps/*
+!/dumps/README.md
+!/dumps/manifest.json

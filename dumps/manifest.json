@@ -1,0 +1,48 @@
+﻿{
+    "scenario":  "normal",
+    "seed":  42,
+    "git_commit":  "743c200a6ea595de1e14a4b355d4d621a93fc54b",
+    "git_dirty":  false,
+    "files":  {
+                  "redis.rdb":  {
+                                    "db":  "redis",
+                                    "bytes":  46486951,
+                                    "sha256":  "214cc8ba868602c2b0d6d3ffd315d6a08b34595f50cff3cc8f1c69d5927ca87c",
+                                    "image":  "redis:7.4",
+                                    "image_id":  "sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f",
+                                    "load_secs":  2.7,
+                                    "export_secs":  6,
+                                    "created":  "2026-09-25T16:37:03.0021252Z"
+                                },
+                  "mongo.archive.gz":  {
+                                           "db":  "mongo",
+                                           "bytes":  8795232,
+                                           "sha256":  "eb601281be3787453d3367b5b0255d5107af4564f35e882c1873f7de369805d7",
+                                           "image":  "mongo:8.0",
+                                           "image_id":  "sha256:4968f22d0c6c10ef29952f3e807f62872ba22b3312f25803564fbfc08255efc2",
+                                           "load_secs":  2.5,
+                                           "export_secs":  1.5,
+                                           "created":  "2026-09-25T16:37:21.2135129Z"
+                                       },
+                  "cassandra_cql.tar.gz":  {
+                                               "db":  "cassandra",
+                                               "bytes":  99272116,
+                                               "sha256":  "16f047219dc495cc3d3ee3972c6b5a39bb9faf63642b8cbe80e5c132fcad9f5a",
+                                               "image":  "cassandra:5.0",
+                                               "image_id":  "sha256:ee178b38a2746a8e15a115bd038ad1f864391d04a84162a018cb0dd79511709a",
+                                               "load_secs":  22.1,
+                                               "export_secs":  30.8,
+                                               "created":  "2026-09-25T16:41:00.6366144Z"
+                                           },
+                  "neo4j.dump":  {
+                                     "db":  "neo4j",
+                                     "bytes":  44363212,
+                                     "sha256":  "120e94f6e182b3fd05eb6c77a4953f2322fd923993e5ead4247561d2b0d7692d",
+                                     "image":  "neo4j:5.26-community",
+                                     "image_id":  "sha256:3388e05ee53c8313d01acdf33e63ad175af95a92226dc8551160564439ce2c8c",
+                                     "load_secs":  10.3,
+                                     "export_secs":  7.4,
+                                     "created":  "2026-09-25T16:42:10.3071426Z"
+                                 }
+              }
+}
