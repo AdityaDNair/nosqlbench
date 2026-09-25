@@ -75,13 +75,18 @@ Target rate = % of that database's best closed-mode median throughput. Send lag 
 
 ## Celebrity vs normal scenario (closed)
 
-| Database | Concurrency | normal ops/s | celebrity ops/s | change |
-|---|---|---|---|---|
-| Redis | 8 | 8,345 | 1,047 | -87% |
-| Redis | 32 | 17,776 | 1,495 | -92% |
-| Cassandra | 8 | 7,482 | 650 | -91% |
-| Cassandra | 32 | 17,048 | 717 | -96% |
-| MongoDB | 8 | 3,940 | 2,352 | -40% |
-| MongoDB | 32 | 5,154 | 1,766 | -66% |
-| Neo4j | 8 | 2,923 | 1,002 | -66% |
-| Neo4j | 32 | 4,600 | 1,282 | -72% |
+| Database | Concurrency | normal ops/s | rank | celebrity ops/s | rank | change |
+|---|---|---|---|---|---|---|
+| Redis | 8 | 8,345 | #1 | 1,047 | #2 | -87% |
+| Redis | 32 | 17,776 | #1 | 1,495 | #2 | -92% |
+| Cassandra | 8 | 7,482 | #2 | 650 | #4 | -91% |
+| Cassandra | 32 | 17,048 | #2 | 717 | #4 | -96% |
+| MongoDB | 8 | 3,940 | #3 | 2,352 | #1 | -40% |
+| MongoDB | 32 | 5,154 | #3 | 1,766 | #1 | -66% |
+| Neo4j | 8 | 2,923 | #4 | 1,002 | #3 | -66% |
+| Neo4j | 32 | 4,600 | #4 | 1,282 | #3 | -72% |
+
+The ranking reverses between the two scenarios:
+
+- c=8: normal **Redis > Cassandra > MongoDB > Neo4j**; celebrity **MongoDB > Redis > Neo4j > Cassandra**.
+- c=32: normal **Redis > Cassandra > MongoDB > Neo4j**; celebrity **MongoDB > Redis > Neo4j > Cassandra**.

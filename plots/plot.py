@@ -197,6 +197,21 @@ def saturated(df: pl.DataFrame) -> set[tuple[str, str, str]]:
     return out
 
 
+def ranking(a: pl.DataFrame, scenario: str, level: str) -> dict[str, int]:
+    """{db: 1-based rank by median throughput} among the databases present."""
+    vals = []
+    for db, _, _, _ in DBS:
+        r = pick(a, scenario=scenario, db=db, level=level)
+        if r:
+            vals.append((r["med"], db))
+    vals.sort(reverse=True)
+    return {db: i + 1 for i, (_, db) in enumerate(vals)}
+
+
+def order_text(rank: dict[str, int]) -> str:
+    return " > ".join(DB_NAME[db] for db, _ in sorted(rank.items(), key=lambda kv: kv[1]))
+
+
 def read_hgrm(path: Path) -> tuple[np.ndarray, np.ndarray]:
     """(latency_us, percentile 0..1) rows of an HdrHistogram text export."""
     xs, ps = [], []
@@ -392,21 +407,27 @@ def fig_celebrity(df, out, made):
     if a.filter(pl.col("scenario") == "celebrity").is_empty():
         return
     fig, axes = plt.subplots(1, 2, figsize=(A4_TEXT_WIDTH_IN, 3.0), sharey=True)
+    orders = []
     for ax, level in zip(axes, ["8", "32"]):
         x = np.arange(len(DBS))
         bw = 0.36
+        rank = {s: ranking(a, s, level) for s in ("normal", "celebrity")}
+        orders.append((level, rank))
         for i, (db, name, color, _) in enumerate(DBS):
             nr = pick(a, scenario="normal", db=db, level=level)
             cr = pick(a, scenario="celebrity", db=db, level=level)
             if nr:
                 ax.bar(i - bw / 2 - 0.01, nr["med"], bw, color=color, edgecolor=SURFACE, linewidth=1.0, zorder=3)
+                ax.annotate(f"#{rank['normal'][db]}", (i - bw / 2 - 0.01, nr["med"]), xytext=(0, 3),
+                            textcoords="offset points", ha="center", va="bottom", fontsize=7, color=INK2)
             if cr:
                 ax.bar(i + bw / 2 + 0.01, cr["med"], bw, color=SURFACE, edgecolor=color, hatch="////",
                        linewidth=0.9, zorder=3)
             if nr and cr:
                 drop = (cr["med"] / nr["med"] - 1) * 100
-                ax.annotate(f"{drop:+.0f}%", (i + bw / 2 + 0.01, cr["med"]), xytext=(0, 3),
-                            textcoords="offset points", ha="center", va="bottom", fontsize=7, color=INK)
+                ax.annotate(f"#{rank['celebrity'][db]}\n{drop:+.0f}%", (i + bw / 2 + 0.01, cr["med"]), xytext=(0, 3),
+                            textcoords="offset points", ha="center", va="bottom", fontsize=7, color=INK,
+                            linespacing=1.15)
         ax.set_xticks(np.arange(len(DBS)), [n for _, n, _, _ in DBS])
         ax.grid(axis="x", visible=False)
         ax.set_title(f"Concurrency {level}", loc="left")
@@ -417,7 +438,14 @@ def fig_celebrity(df, out, made):
         matplotlib.patches.Patch(facecolor=SURFACE, edgecolor=INK2, hatch="////", label="celebrity (most-followed = most active)"),
     ]
     fig.legend(handles=handles, loc="lower center", ncols=2, bbox_to_anchor=(0.5, -0.06))
-    fig.suptitle("Celebrity vs normal scenario, closed mode (labels: change vs normal)", x=0.01, ha="left", fontsize=9, color=INK)
+    fig.suptitle("Celebrity vs normal scenario, closed mode (labels: rank within the scenario, change vs normal)",
+                 x=0.01, ha="left", fontsize=9, color=INK)
+    caption = ["The ranking reverses: Redis and Cassandra (fan-out on write) take the top two places under normal "
+               "activity, but when the most-followed users are\nalso the most active, MongoDB leads and Cassandra "
+               "falls to last."]
+    for level, rank in orders:
+        caption.append(f"c={level}:  normal {order_text(rank['normal'])}   |   celebrity {order_text(rank['celebrity'])}")
+    fig.text(0.0, -0.10, "\n".join(caption), fontsize=6.5, color=INK2, ha="left", va="top")
     fig.tight_layout()
     save(fig, out, "05_celebrity_vs_normal", made)
 
@@ -596,12 +624,21 @@ def summary(df: pl.DataFrame, root: Path) -> str:
     ct = agg(cel, "tput")
     if ct.filter(pl.col("scenario") == "celebrity").height:
         L.append("## Celebrity vs normal scenario (closed)\n")
-        L.append("| Database | Concurrency | normal ops/s | celebrity ops/s | change |\n|---|---|---|---|---|")
+        L.append("| Database | Concurrency | normal ops/s | rank | celebrity ops/s | rank | change |\n"
+                 "|---|---|---|---|---|---|---|")
+        ranks = {(s, lvl): ranking(ct, s, lvl) for s in ("normal", "celebrity") for lvl in ("8", "32")}
         for db, name, _, _ in DBS:
             for lvl in ("8", "32"):
                 nr, cr = pick(ct, scenario="normal", db=db, level=lvl), pick(ct, scenario="celebrity", db=db, level=lvl)
                 if nr and cr:
-                    L.append(f"| {name} | {lvl} | {fmt_ops(nr['med'])} | {fmt_ops(cr['med'])} | {(cr['med'] / nr['med'] - 1) * 100:+.0f}% |")
+                    L.append(f"| {name} | {lvl} | {fmt_ops(nr['med'])} | #{ranks[('normal', lvl)][db]} "
+                             f"| {fmt_ops(cr['med'])} | #{ranks[('celebrity', lvl)][db]} "
+                             f"| {(cr['med'] / nr['med'] - 1) * 100:+.0f}% |")
+        L.append("")
+        L.append("The ranking reverses between the two scenarios:\n")
+        for lvl in ("8", "32"):
+            L.append(f"- c={lvl}: normal **{order_text(ranks[('normal', lvl)])}**; "
+                     f"celebrity **{order_text(ranks[('celebrity', lvl)])}**.")
         L.append("")
 
     noop = allrows.filter(pl.col("db") == "noop")

@@ -132,21 +132,33 @@ differ between sessions (see the drift limitation below).
    c=32: 38 ms MongoDB, 31 ms Neo4j vs 8.1 ms Redis and 6.9 ms Cassandra).
 2. **…and loses badly when popular users are also active.** In the celebrity
    scenario throughput drops 87–92% for Redis and 90–95% for Cassandra, but only
-   40–68% for MongoDB and 61–73% for Neo4j. MongoDB becomes the fastest (2,025
-   ops/s at c=8, against Redis 1,029 and Cassandra 630).
-3. **Latency under load (open mode at 50% of each database's best closed
+   40–68% for MongoDB and 61–73% for Neo4j.
+3. **The ranking reverses between the scenarios**, at both c=8 and c=32:
+
+   | Scenario | Order by throughput (c=32) |
+   |---|---|
+   | normal | Redis 18,604 > Cassandra 14,313 > MongoDB 4,612 > Neo4j 4,111 |
+   | celebrity | MongoDB 1,493 > Redis 1,456 > Neo4j 1,097 > Cassandra 722 |
+
+   Fan-out on write holds both top places under normal activity and neither
+   under celebrity activity: Cassandra goes from #2 to last, Redis from #1 to
+   #2 behind MongoDB, and the two read-time designs move up. Which database
+   "wins" is decided by the shape of the social graph, not by the database.
+   Marked on figure `05_celebrity_vs_normal`, where each bar carries its rank
+   within its scenario.
+4. **Latency under load (open mode at 50% of each database's best closed
    throughput):** p99 12.2 ms Redis, 15.9 ms MongoDB, 17.1 ms Neo4j, 28.9 ms
    Cassandra. At 80% the tails reach 34 ms (Redis), 75 ms (MongoDB), 159 ms
    (Neo4j) and 172 ms (Cassandra).
-4. **At 95% of best closed throughput, only Redis still has a usable tail.**
+5. **At 95% of best closed throughput, only Redis still has a usable tail.**
    Redis holds p99 at 60 ms. Cassandra (p99 1.4 s), MongoDB (6.6 s) and Neo4j
    (6.2 s) are *saturation episodes*, not steady-state latency — see the callout
    below. Cassandra still delivers its full offered rate; MongoDB and Neo4j do
    not.
-5. **The transport floor is ~0.35–0.45 ms** (redis-ping p50, 0.77–1.0 ms p99),
+6. **The transport floor is ~0.35–0.45 ms** (redis-ping p50, 0.77–1.0 ms p99),
    so single-request latencies below ~1 ms are mostly the Windows ↔ Docker VM
    path, not the database.
-6. **Driver pool sizes were checked, not assumed.** For each database a larger
+7. **Driver pool sizes were checked, not assumed.** For each database a larger
    pool / more connections per worker was tested at c=128 on the same boot; none
    clearly helped, so every database uses its driver default (Redis 1
    multiplexed connection, MongoDB 10, Cassandra 1, Neo4j 16).
