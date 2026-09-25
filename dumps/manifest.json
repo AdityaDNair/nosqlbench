@@ -1,48 +1,48 @@
 ﻿{
     "scenario":  "normal",
     "seed":  42,
-    "git_commit":  "743c200a6ea595de1e14a4b355d4d621a93fc54b",
+    "git_commit":  "6082df153151ea1b8b958e3c9c53e1cb3535d954",
     "git_dirty":  false,
     "files":  {
                   "redis.rdb":  {
                                     "db":  "redis",
                                     "bytes":  46486951,
-                                    "sha256":  "214cc8ba868602c2b0d6d3ffd315d6a08b34595f50cff3cc8f1c69d5927ca87c",
+                                    "sha256":  "4e2503739c112e571458762b7dc1585bfad9e2a27bdb581b82509f0640d902b1",
                                     "image":  "redis:7.4",
                                     "image_id":  "sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f",
-                                    "load_secs":  2.7,
+                                    "load_secs":  2.6,
                                     "export_secs":  6,
-                                    "created":  "2026-09-25T16:37:03.0021252Z"
+                                    "created":  "2026-09-25T17:11:03.1520112Z"
                                 },
                   "mongo.archive.gz":  {
                                            "db":  "mongo",
-                                           "bytes":  8795232,
-                                           "sha256":  "eb601281be3787453d3367b5b0255d5107af4564f35e882c1873f7de369805d7",
+                                           "bytes":  8791775,
+                                           "sha256":  "23c5b00fac0c818b4e1307a8e9f019eb141c8e1842a147bfacd0cc08a7d0cf08",
                                            "image":  "mongo:8.0",
                                            "image_id":  "sha256:4968f22d0c6c10ef29952f3e807f62872ba22b3312f25803564fbfc08255efc2",
-                                           "load_secs":  2.5,
-                                           "export_secs":  1.5,
-                                           "created":  "2026-09-25T16:37:21.2135129Z"
+                                           "load_secs":  2.4,
+                                           "export_secs":  1.4,
+                                           "created":  "2026-09-25T17:11:14.6687046Z"
                                        },
                   "cassandra_cql.tar.gz":  {
                                                "db":  "cassandra",
-                                               "bytes":  99272116,
-                                               "sha256":  "16f047219dc495cc3d3ee3972c6b5a39bb9faf63642b8cbe80e5c132fcad9f5a",
+                                               "bytes":  99244530,
+                                               "sha256":  "80309e629ceb98c33de9493f4d9da7f794017d2519364b4e631f040846746fab",
                                                "image":  "cassandra:5.0",
                                                "image_id":  "sha256:ee178b38a2746a8e15a115bd038ad1f864391d04a84162a018cb0dd79511709a",
-                                               "load_secs":  22.1,
-                                               "export_secs":  30.8,
-                                               "created":  "2026-09-25T16:41:00.6366144Z"
+                                               "load_secs":  21.8,
+                                               "export_secs":  30.2,
+                                               "created":  "2026-09-25T17:13:07.7896180Z"
                                            },
                   "neo4j.dump":  {
                                      "db":  "neo4j",
-                                     "bytes":  44363212,
-                                     "sha256":  "120e94f6e182b3fd05eb6c77a4953f2322fd923993e5ead4247561d2b0d7692d",
+                                     "bytes":  44362979,
+                                     "sha256":  "b7890bc7ea485901c7b9627eb0fbebe322ccb233251dd50def45a14e1f623511",
                                      "image":  "neo4j:5.26-community",
                                      "image_id":  "sha256:3388e05ee53c8313d01acdf33e63ad175af95a92226dc8551160564439ce2c8c",
-                                     "load_secs":  10.3,
-                                     "export_secs":  7.4,
-                                     "created":  "2026-09-25T16:42:10.3071426Z"
+                                     "load_secs":  9.2,
+                                     "export_secs":  6.8,
+                                     "created":  "2026-09-25T17:13:37.0163921Z"
                                  }
               }
 }

@@ -34,6 +34,25 @@ What's in each dump (the same dataset in each database's schema, see CLAUDE.md Â
   a `BenchMeta` node in Neo4j). The adapters check it, so `bench run` works
   directly against a restored database.
 
+**The SHA-256s in `manifest.json` identify these exact files, but they are
+not reproducible.** Re-running the script loads the same data but produces
+different bytes each time:
+
+- `redis.rdb`: the header holds `ctime`, `used-mem` and a random `repl-id`,
+  and keys and hash fields are written in dict order, which depends on
+  Redis's per-process random hash seed.
+- `mongo.archive.gz`: mongodump dumps collections in parallel, so the order
+  of collections and blocks in the archive varies.
+- `cassandra_cql.tar.gz`: `COPY TO` splits the token ring across worker
+  processes and writes rows in arrival order; tar headers hold file times.
+- `neo4j.dump`: the store's bytes differ between loads (not traced further).
+
+To check that two dumps hold the same data, compare the content instead:
+`redis-cli DEBUG DIGEST` (server started with `--enable-debug-command yes`),
+`db.runCommand({dbHash: 1})` in MongoDB, sorted CSVs for Cassandra, and a
+sorted Cypher export of all node and relationship properties for Neo4j. Two
+consecutive runs on 2026-09-25 matched on all four checks.
+
 ## Restoring
 
 Run these from the repo root. They use the compose services, so the restored
