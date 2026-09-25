@@ -640,6 +640,11 @@ def summary(df: pl.DataFrame, root: Path) -> str:
             L.append(f"- c={lvl}: normal **{order_text(ranks[('normal', lvl)])}**; "
                      f"celebrity **{order_text(ranks[('celebrity', lvl)])}**.")
         L.append("")
+        ns = sorted({int(r["n"]) for r in ct.filter(pl.col("scenario") == "celebrity").iter_rows(named=True)})
+        if ns and ns[-1] <= 2:
+            how = "a single run each" if ns == [1] else f"only {'/'.join(str(n) for n in ns)} runs each"
+            L.append(f"Celebrity cells are {how}, so neighbouring databases within a few per cent of one another are "
+                     "not separated by this data; only the large gaps are. See the README.\n")
 
     noop = allrows.filter(pl.col("db") == "noop")
     if noop.height:

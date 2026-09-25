@@ -146,6 +146,15 @@ differ between sessions (see the drift limitation below).
    "wins" is decided by the shape of the social graph, not by the database.
    Marked on figure `05_celebrity_vs_normal`, where each bar carries its rank
    within its scenario.
+
+   **The claim here is that fan-out on write loses both top places, not a
+   specific Redis/MongoDB ordering.** At c=32 the two are 1,456 vs 1,493 ops/s
+   — 2.5% apart, from a single run each (the celebrity sweep is
+   `-Runs 1 -Levels 8,32`), so that gap is within run-to-run variation and the
+   #1/#2 labels between them should not be read as a result. The differences
+   that do hold up are the large ones: MongoDB ahead of Redis by 2× at c=8
+   (2,025 vs 1,029), and Cassandra last at both levels by ~1.5× against the
+   next database up (630 vs Neo4j 976 at c=8; 722 vs 1,097 at c=32).
 4. **Latency under load (open mode at 50% of each database's best closed
    throughput):** p99 12.2 ms Redis, 15.9 ms MongoDB, 17.1 ms Neo4j, 28.9 ms
    Cassandra. At 80% the tails reach 34 ms (Redis), 75 ms (MongoDB), 159 ms

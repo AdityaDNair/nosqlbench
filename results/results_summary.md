@@ -90,3 +90,5 @@ The ranking reverses between the two scenarios:
 
 - c=8: normal **Redis > Cassandra > MongoDB > Neo4j**; celebrity **MongoDB > Redis > Neo4j > Cassandra**.
 - c=32: normal **Redis > Cassandra > MongoDB > Neo4j**; celebrity **MongoDB > Redis > Neo4j > Cassandra**.
+
+Celebrity cells are a single run each, so neighbouring databases within a few per cent of one another are not separated by this data; only the large gaps are. See the README.
