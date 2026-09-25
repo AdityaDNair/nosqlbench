@@ -70,8 +70,8 @@ read returns the same 20 posts as fan-out on read.
 - **Telemetry:** one `u64` per event through a per-worker SPSC ring to a pinned
   aggregator; HdrHistogram (1 ns–60 s, 3 significant figures). Warm-up (15 s) is
   discarded; 60 s are measured. A single dropped record invalidates a run.
-- **Calibration:** the noop adapter measures engine overhead (~53M ops/s
-  closed with a 19 ns p50); `redis-ping` (one PING per op) measures the
+- **Calibration:** the noop adapter measures engine overhead (~52M ops/s
+  closed with a 20 ns p50); `redis-ping` (one PING per op) measures the
   Windows → Docker VM → container transport floor.
 
 Code: `src/` (engine, adapters, loaders), `scripts/` (PowerShell), `plots/plot.py`,
@@ -116,32 +116,84 @@ validation-run timings). Then:
 writes `results\final\figures\*.png|svg` and `results\final\results_summary.md`.
 A single database: `scripts\run_db.ps1 -Db cassandra` (see its help).
 
-## Key findings (validation runs, `results\`)
+## Key findings (final run, `results\final\`)
 
-These come from the per-milestone validation sweeps (104 runs, 0 errors, 0
-timeouts, 0 dropped records). The final numbers come from one `run_all.ps1`
-session in `results\final\`; see `results_summary.md` there for the tables.
+These are the single-session final run: 107 runs, 3 errors, 0 timeouts, 0
+dropped records. Full tables and figures:
+[`results\final\results_summary.md`](results/final/results_summary.md) and
+`results\final\figures\`. Values are the median across 3 repeats. The
+per-milestone validation sweeps in `results\` are kept for comparison; numbers
+differ between sessions (see the drift limitation below).
 
 1. **Fan-out on write wins the normal workload.** Closed-mode throughput at
-   c=128: Redis 30,057 ops/s, Cassandra 25,288, MongoDB 5,275, Neo4j 4,644.
+   c=128: Redis 29,310 ops/s, Cassandra 21,020, MongoDB 4,618, Neo4j 4,317.
    MongoDB and Neo4j saturate from c≈32. Their timeline read (40% of the mix)
    gathers followees' posts at read time and is their slowest operation (p99 at
-   c=32: 33 ms MongoDB, 28 ms Neo4j vs 8.3 ms Redis and 6.7 ms Cassandra).
+   c=32: 38 ms MongoDB, 31 ms Neo4j vs 8.1 ms Redis and 6.9 ms Cassandra).
 2. **…and loses badly when popular users are also active.** In the celebrity
-   scenario throughput drops 87–92% for Redis and 91–96% for Cassandra, but only
-   40–66% for MongoDB and 66–72% for Neo4j. MongoDB becomes the fastest (2,352
-   ops/s at c=8).
+   scenario throughput drops 87–92% for Redis and 90–95% for Cassandra, but only
+   40–68% for MongoDB and 61–73% for Neo4j. MongoDB becomes the fastest (2,025
+   ops/s at c=8, against Redis 1,029 and Cassandra 630).
 3. **Latency under load (open mode at 50% of each database's best closed
-   throughput):** p99 11.4 ms Redis, 15.1 ms Neo4j, 15.3 ms MongoDB, 31.3 ms
-   Cassandra. Near saturation (95%) tails reach hundreds of ms for all but
-   Redis.
-4. **The transport floor is ~0.34–0.44 ms** (redis-ping p50), so single-request
-   latencies below ~1 ms are mostly the Windows ↔ Docker VM path, not the
-   database.
-5. **Driver pool sizes were checked, not assumed.** For each database a larger
+   throughput):** p99 12.2 ms Redis, 15.9 ms MongoDB, 17.1 ms Neo4j, 28.9 ms
+   Cassandra. At 80% the tails reach 34 ms (Redis), 75 ms (MongoDB), 159 ms
+   (Neo4j) and 172 ms (Cassandra).
+4. **At 95% of best closed throughput, only Redis still has a usable tail.**
+   Redis holds p99 at 60 ms. Cassandra (p99 1.4 s), MongoDB (6.6 s) and Neo4j
+   (6.2 s) are *saturation episodes*, not steady-state latency — see the callout
+   below. Cassandra still delivers its full offered rate; MongoDB and Neo4j do
+   not.
+5. **The transport floor is ~0.35–0.45 ms** (redis-ping p50, 0.77–1.0 ms p99),
+   so single-request latencies below ~1 ms are mostly the Windows ↔ Docker VM
+   path, not the database.
+6. **Driver pool sizes were checked, not assumed.** For each database a larger
    pool / more connections per worker was tested at c=128 on the same boot; none
    clearly helped, so every database uses its driver default (Redis 1
    multiplexed connection, MongoDB 10, Cassandra 1, Neo4j 16).
+
+### Saturation episodes at 95% load
+
+Three open-mode cells are marked ▲ in `results_summary.md` and on figure
+`04_open_mode_latency_send_lag`: Cassandra, MongoDB and Neo4j at 95% of their
+best closed-mode throughput. The rule is mechanical — latency p99 above 1 s
+*and* send-lag p99 at least half of it:
+
+| Cell | latency p99 | send-lag p99 | target ops/s | achieved ops/s |
+|---|---|---|---|---|
+| Cassandra 95% | 1,365 ms | 1,313 ms | 19,969 | 19,974 |
+| MongoDB 95% | 6,644 ms | 6,380 ms | 4,387 | 4,273 |
+| Neo4j 95% | 6,250 ms | 5,998 ms | 4,100 | 3,929 |
+
+Almost all of each figure is *send lag*: requests that the client could not
+even hand to the driver on time because in-flight requests were capped and the
+database was not draining them. Open mode charges that lateness to latency by
+design (that is what makes it coordinated-omission safe), so these numbers say
+"the offered rate is past what this database absorbs here", not "a request takes
+6 seconds". MongoDB and Neo4j also fall short of the target rate, which is the
+same fact seen from the throughput side. Redis at 95% is not an episode: p99
+60 ms with 15 ms of send lag, at the full offered rate.
+
+Cassandra at 80% is borderline rather than flagged: across its three runs p99
+was 83.5 / 172 / 409 ms with send lag 10.8 / 99.5 / 347 ms, so one of the three
+runs was already an early episode. Its 95% range (278–1,941 ms) is wide for the
+same reason.
+
+### The three errors
+
+One run in the whole sweep returned errors: **Cassandra, open mode, 95% load,
+run 2 — 3 POST_CREATE write timeouts out of 120,630 post creates (0.002%)**,
+all within one second (measure second 33). The driver message:
+
+> Not enough nodes responded to the write request in time to satisfy required
+> consistency level (consistency: One, received: 0, required: 1, write_type:
+> Simple) — Operation timed out, received only 0 responses.
+
+With a single node at consistency ONE, this is the coordinator failing to write
+locally within its timeout while overloaded — the same saturation that produced
+that run's 1.9 s p99, surfacing as failed writes rather than slow ones. It is
+reported as its own row in `results_summary.md` ("Errors and timeouts") rather
+than folded into a median. Every other run in `results\final\`, and all 104
+validation runs, completed with 0 errors and 0 timeouts.
 
 ## Limitations
 
@@ -155,15 +207,18 @@ session in `results\final\`; see `results_summary.md` there for the tables.
   WSL2 VM → container and back. redis-ping measures that floor at 0.34 ms p50
   (c=1) to 0.44 ms (c=128), and it is included in every latency here.
 - **Host CPU contention (send lag).** The load generator and the Docker VM share
-  host CPUs. In open mode at 50% load, send-lag p99 was 0.9 ms for Redis but
-  4.1 ms for MongoDB and 5.8 ms for Cassandra. Diagnostic: the noop adapter at
+  host CPUs. In open mode at 50% load in the final run, send-lag p99 was 0.56 ms
+  for Redis and 0.69 ms for Cassandra but 3.5 ms for MongoDB and 3.4 ms for
+  Neo4j. Diagnostic: the noop adapter at
   12,644 ops/s had send-lag p99 **26 µs with the VM idle and 5,718 µs while
   `cassandra-stress` kept the container at ~590% CPU**, so the lateness is the
   VM's vCPUs competing with the workers, not driver work. It scales with the
   database's CPU use and is charged to latency, so open-mode tails of the
   CPU-heavy databases include a few ms of client-side delay. Send-lag p99 is
-  also unstable near the 1% line (Neo4j: 2.7 ms at 50%, 0.09 ms at 80%, with
-  p99.9 5–8 ms in both), so p99.9 is reported alongside it.
+  also unstable near the 1% line (MongoDB: 3.5 ms at 50%, 0.66 ms at 80%, with
+  p99.9 6.2 and 6.5 ms), so p99.9 is reported alongside it. At 95% load it stops
+  being a small correction and becomes the whole measurement for three of the
+  four databases; those cells are marked as saturation episodes above.
 - **Differing durability settings.** Redis runs with persistence off (no RDB,
   no AOF); MongoDB uses w:1 with default journaling; Cassandra uses consistency
   ONE with its commit log; Neo4j uses its default transaction log. Write

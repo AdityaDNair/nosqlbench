@@ -59,6 +59,18 @@ OP_LABEL = {
 LEVELS = [1, 8, 32, 128]
 OPEN_LEVELS = ["50pct", "80pct", "95pct"]
 
+# --- Saturation episodes ---------------------------------------------------
+# An open-mode level is a *saturation episode*, not a steady-state latency: the
+# database cannot absorb the offered rate, requests queue in the client, and
+# nearly all of the reported latency is the client's own lateness (send lag),
+# which open mode charges to latency by design. Flagged when the median
+# latency p99 is at least SAT_LAT_US and send-lag p99 is at least SAT_LAG_SHARE
+# of it. Such cells are labelled everywhere they appear and must not be read as
+# the latency the database serves at that rate.
+SAT_LAT_US = 1_000_000.0
+SAT_LAG_SHARE = 0.5
+SAT_MARK = "▲"  # filled triangle, used in figures and tables
+
 plt.rcParams.update(
     {
         "font.family": ["Segoe UI", "DejaVu Sans"],
@@ -106,6 +118,9 @@ def load(root: Path) -> pl.DataFrame:
                     continue
                 meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
                 lag = meta.get("send_lag_us") or {}
+                first_err = "; ".join(
+                    e.get("error", "") for e in (meta.get("first_errors") or []) if e.get("error")
+                )
                 summ = pl.read_csv(run_dir / "summary.csv", infer_schema_length=0)
                 for r in summ.iter_rows(named=True):
                     rows.append(
@@ -130,6 +145,7 @@ def load(root: Path) -> pl.DataFrame:
                             "target_rate": float(meta["config"]["run"]["rate"]),
                             "start": meta.get("start_time_utc", ""),
                             "git": (meta.get("system", {}).get("git_commit") or "")[:7],
+                            "first_error": first_err,
                             "dir": str(run_dir),
                         }
                     )
@@ -163,6 +179,22 @@ def pick(a: pl.DataFrame, **kw) -> dict | None:
     for k, v in kw.items():
         q = q.filter(pl.col(k) == v)
     return q.row(0, named=True) if q.height else None
+
+
+def saturated(df: pl.DataFrame) -> set[tuple[str, str, str]]:
+    """{(scenario, db, level)} open-mode cells that are saturation episodes."""
+    base = df.filter((pl.col("op") == "ALL") & (pl.col("mode") == "open"))
+    if base.is_empty():
+        return set()
+    lat, lag = agg(base, "p99"), agg(base, "lag_p99")
+    out = set()
+    for r in lat.iter_rows(named=True):
+        g = pick(lag, scenario=r["scenario"], db=r["db"], level=r["level"], op="ALL")
+        if not g or g["med"] != g["med"]:
+            continue
+        if r["med"] >= SAT_LAT_US and g["med"] >= SAT_LAG_SHARE * r["med"]:
+            out.add((r["scenario"], r["db"], r["level"]))
+    return out
 
 
 def read_hgrm(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -313,7 +345,8 @@ def fig_open(df, out, made):
         return
     lat = agg(base, "p99")
     lag = agg(base, "lag_p99")
-    fig, ax = plt.subplots(figsize=(A4_TEXT_WIDTH_IN, 3.2))
+    sat = saturated(df)
+    fig, ax = plt.subplots(figsize=(A4_TEXT_WIDTH_IN, 3.6))
     n = len(DBS)
     group = 0.84
     slot = group / n
@@ -327,15 +360,29 @@ def fig_open(df, out, made):
                edgecolor=SURFACE, linewidth=1.0, zorder=3, label=f"{name} latency p99")
         ax.bar(centre + bw / 2, [ms(r["med"]) if r else np.nan for r in gv], bw, color=SURFACE,
                edgecolor=color, hatch="////", linewidth=0.9, zorder=3)
+        for j, lvl in enumerate(OPEN_LEVELS):
+            if ("normal", db, lvl) not in sat or not lv[j]:
+                continue
+            top = max(ms(lv[j]["med"]), ms(gv[j]["med"]) if gv[j] else 0.0)
+            ax.annotate(SAT_MARK, (centre[j], top * 1.22), ha="center", va="bottom",
+                        fontsize=7, color=INK2, zorder=4)
     ax.set_yscale("log")
     ax.set_xticks(x, ["50% of best closed", "80%", "95%"])
     ax.grid(axis="x", visible=False)
     ax.set_ylabel("ms (log scale)")
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.set_ylim(top=ax.get_ylim()[1] * 2.2)
     ax.set_title("Open-mode latency p99 (solid) with send-lag p99 beside it (hatched), normal scenario, median of runs", loc="left")
     handles, labels = ax.get_legend_handles_labels()
     handles.append(matplotlib.patches.Patch(facecolor=SURFACE, edgecolor=INK2, hatch="////", label="send-lag p99 (client lateness, same colour)"))
-    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncols=3, fontsize=7)
+    handles.append(matplotlib.lines.Line2D([], [], linestyle="none", marker="^", color=INK2, markersize=4,
+                                           label="saturation episode, not steady-state latency"))
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncols=3, fontsize=7)
+    ax.text(0.0, -0.30,
+            f"{SAT_MARK} the database could not absorb the offered rate: latency p99 above 1 s with send lag at least "
+            "half of it, so almost all of the\nbar is requests queued in the client waiting to be sent. Read those bars "
+            "as the onset of saturation, not as service latency.",
+            fontsize=6.5, color=INK2, ha="left", va="top", transform=ax.transAxes)
     save(fig, out, "04_open_mode_latency_send_lag", made)
 
 
@@ -439,6 +486,16 @@ def rng(r: dict, f) -> str:
     return f if r["n"] <= 1 else f"{f} [{r['_lo']}–{r['_hi']}]"
 
 
+def error_seconds(run_dir: Path, op: str) -> list[int]:
+    """Measure-phase seconds in which this op recorded errors."""
+    ts = run_dir / "timeseries.csv"
+    if not ts.exists():
+        return []
+    t = pl.read_csv(ts, infer_schema_length=0)
+    t = t.filter((pl.col("op") == op) & (pl.col("errors").cast(pl.Int64) > 0))
+    return sorted(int(v) for v in t["second"].to_list())
+
+
 def summary(df: pl.DataFrame, root: Path) -> str:
     L = []
     allrows = df.filter(pl.col("op") == "ALL")
@@ -454,6 +511,24 @@ def summary(df: pl.DataFrame, root: Path) -> str:
         L.append(f"- Time span (UTC): {starts[0]} → {starts[-1]}.")
     L.append(f"- Git commits: {', '.join(sorted(set(allrows['git'].to_list()) - {''}))}.")
     L.append("- Values are the median across repeated runs; brackets give the min–max range. Latency in ms.\n")
+
+    bad = df.filter((pl.col("op") != "ALL") & ((pl.col("errors") > 0) | (pl.col("timeouts") > 0)))
+    L.append("## Errors and timeouts\n")
+    if bad.is_empty():
+        L.append("None: every run completed with 0 errors and 0 timeouts.\n")
+    else:
+        L.append("Called out per run instead of folded into a median: they are rare, localised, and each one is a "
+                 "request the database did not serve.\n")
+        L.append("| Run | Operation | errors | timeouts | of count | measure seconds | driver message |\n"
+                 "|---|---|---|---|---|---|---|")
+        for r in bad.sort(["scenario", "db", "level", "run", "op"]).iter_rows(named=True):
+            msg = (r["first_error"] or "").replace("|", "/")
+            secs = error_seconds(Path(r["dir"]), r["op"])
+            when = ", ".join(str(s) for s in secs) if secs else "–"
+            L.append(f"| {r['scenario']} / {r['db']} / {r['mode']} {r['level'].replace('pct', '%')} run {r['run']} "
+                     f"| {OP_LABEL.get(r['op'], r['op'])} | {r['errors']} | {r['timeouts']} | {r['count']:,} "
+                     f"| {when} | {msg} |")
+        L.append("")
 
     def closed(db, level, col):
         return agg(allrows.filter((pl.col("mode") == "closed") & (pl.col("scenario") == "normal")), col).pipe(
@@ -491,11 +566,17 @@ def summary(df: pl.DataFrame, root: Path) -> str:
         L.append(f"| {OP_LABEL[op]} | " + " | ".join(cells) + " |")
     L.append("")
 
+    sat = saturated(df)
     op_rows = allrows.filter((pl.col("mode") == "open") & (pl.col("scenario") == "normal"))
     if op_rows.height:
         L.append("## Open mode, normal scenario (all operations)\n")
         L.append("Target rate = % of that database's best closed-mode median throughput. Send lag = how late the client "
                  "started requests (charged to latency); see the host-contention limitation in the README.\n")
+        L.append(f"{SAT_MARK} marks a **saturation episode**, not a steady-state latency: latency p99 above 1 s with "
+                 "send-lag p99 at least half of it, meaning the database could not absorb the offered rate and almost "
+                 "all of the reported figure is requests queued in the client waiting to be sent. Read those rows as "
+                 "the onset of saturation. They carry the same mark on figure "
+                 "`04_open_mode_latency_send_lag`.\n")
         L.append("| Database | Load | target ops/s | achieved ops/s | p50 | p99 [range] | p99.9 | send-lag p99 [range] | send-lag p99.9 |\n"
                  "|---|---|---|---|---|---|---|---|---|")
         cols = {c: agg(op_rows, c) for c in ("tput", "p50", "p99", "p999", "lag_p99", "lag_p999", "target_rate")}
@@ -504,7 +585,8 @@ def summary(df: pl.DataFrame, root: Path) -> str:
                 g = {c: pick(v, db=db, level=lvl) for c, v in cols.items()}
                 if not g["tput"]:
                     continue
-                L.append(f"| {name} | {lvl.replace('pct', '%')} | {fmt_ops(g['target_rate']['med'])} | {fmt_ops(g['tput']['med'])} | "
+                mark = f" {SAT_MARK}" if ("normal", db, lvl) in sat else ""
+                L.append(f"| {name} | {lvl.replace('pct', '%')}{mark} | {fmt_ops(g['target_rate']['med'])} | {fmt_ops(g['tput']['med'])} | "
                          f"{fmt_ms(g['p50']['med'])} | {fmt_ms(g['p99']['med'])} [{fmt_ms(g['p99']['lo'])}–{fmt_ms(g['p99']['hi'])}] | "
                          f"{fmt_ms(g['p999']['med'])} | {fmt_ms(g['lag_p99']['med'])} [{fmt_ms(g['lag_p99']['lo'])}–{fmt_ms(g['lag_p99']['hi'])}] | "
                          f"{fmt_ms(g['lag_p999']['med'])} |")
